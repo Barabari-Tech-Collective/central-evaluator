@@ -5,6 +5,7 @@ import logger from '../config/logger.js';
 import { triggerGraderWorkflow } from '../services/githubActionService.js';
 import { withTimeout } from '../evaluators/react/utils/timeout.js';
 import { webhookPubSub } from '../services/webhookPubSub.js';
+import { generatePythonAIFeedback } from '../evaluators/python/aiFeedback.js';
 
 let pythonWorker = null;
 
@@ -12,7 +13,6 @@ export async function initializePythonWorker() {
   try {
     logger.info('Initializing python Worker...');
 
-    const jsQueue = queueManager.getQueue('python');
     const config = queueManager.getConfig('python');
 
     pythonWorker = new Worker(
@@ -34,25 +34,7 @@ export async function initializePythonWorker() {
                 const githubResult = await webhookPromise;
                 
                 if (githubResult.status === 'completed') {
-                  const testCaseResults = githubResult.results || [];
-                  let score = 0;
-                  let feedback = "Evaluation completed successfully.";
-                  
-                  if (evaluationMode === 'function') {
-                    const total = testCaseResults.length;
-                    const passed = testCaseResults.filter(r => r.passed).length;
-                    score = total > 0 ? (passed / total) * 100 : 0;
-                    feedback = `Passed ${passed} out of ${total} test cases.`;
-                  } else if (evaluationMode === 'script') {
-                    score = testCaseResults[0]?.score || 0;
-                    feedback = testCaseResults[0]?.passed ? "All logs matched." : "Some logs did not match.";
-                  }
-
-                  return {
-                    score,
-                    feedback,
-                    details: testCaseResults
-                  };
+                  return githubResult.results || githubResult.evaluation || [];
                 } else {
                   throw new Error("GitHub Actions job failed or cancelled");
                 }
@@ -61,8 +43,96 @@ export async function initializePythonWorker() {
               `python-eval ${job.id}`
             );
             
-            logger.info(`Python Job ${job.id} completed via GitHub Actions`);
-            return { success: true, results };
+            let finalScore = 0;
+            let passedCount = 0;
+            let totalCount = 0;
+
+            if (Array.isArray(results)) {
+              totalCount = results.length;
+              passedCount = results.filter(r => r.passed).length;
+              finalScore = totalCount > 0 ? (passedCount / totalCount) * 100 : 0;
+            } else if (typeof results?.score === 'number') {
+              finalScore = results.score;
+              const match = (results.feedback || '').match(/(\d+)\s*of\s*(\d+)/);
+              if (match) {
+                passedCount = parseInt(match[1], 10);
+                totalCount = parseInt(match[2], 10);
+              }
+            }
+
+            const globalPassRatio = finalScore / 100;
+
+            let rubric = null;
+            if (job.data.rubricText && job.data.rubricText !== 'Standard evaluation') {
+              try {
+                let r = job.data.rubricText;
+                while (typeof r === 'string') {
+                  r = JSON.parse(r);
+                }
+                if (Array.isArray(r)) {
+                  rubric = { criteria: r };
+                } else if (r && r.criteria && Array.isArray(r.criteria)) {
+                  rubric = r;
+                }
+              } catch(e) {
+                 logger.warn(`Failed to parse rubricText for Python Job ${job.id}: ${e.message}`);
+              }
+            }
+
+            const breakdown = [];
+            const strengths = [];
+            const issues = [];
+
+            if (rubric && rubric.criteria && rubric.criteria.length > 0) {
+              finalScore = 0; // Recalculate based on rubric weights
+              for (const c of rubric.criteria) {
+                 const maxPts = typeof c.weight === 'number' ? c.weight : (typeof c.score === 'number' ? c.score : 0);
+                 const awardedPts = Math.round(maxPts * globalPassRatio);
+                 finalScore += awardedPts;
+
+                 const reason = totalCount > 0 
+                    ? `Passed ${passedCount}/${totalCount} test cases.` 
+                    : "No test cases run.";
+
+                 breakdown.push({
+                   item: c.name,
+                   awarded: awardedPts,
+                   max: maxPts,
+                   reason
+                 });
+
+                 if (globalPassRatio >= 1.0) {
+                   strengths.push(`[${c.name}] ${reason} (earned ${awardedPts}/${maxPts} marks)`);
+                 } else if (globalPassRatio >= 0.5) {
+                   strengths.push(`[${c.name}] ${reason} (earned ${awardedPts}/${maxPts} marks)`);
+                   issues.push(`[${c.name}] Missed some test cases. (earned ${awardedPts}/${maxPts} marks)`);
+                 } else {
+                   issues.push(`[${c.name}] ${reason} (earned ${awardedPts}/${maxPts} marks)`);
+                 }
+              }
+            }
+
+            logger.info(`Python Job ${job.id} completed via GitHub Actions. Generating AI feedback...`);
+            
+            const summaryStr = await generatePythonAIFeedback(job.data, results, finalScore);
+            
+            const aiFeedbackString = {
+              summary: summaryStr,
+              strengths: strengths.length > 0 ? strengths : (finalScore === 100 ? ["Passed all tests."] : []),
+              issues: issues,
+              breakdown: breakdown
+            };
+
+            return {
+              success: true,
+              studentId: submission.studentId,
+              studentName: submission.studentName,
+              evaluation: {
+                score: finalScore,
+                feedback: aiFeedbackString,
+                details: results
+              }
+            };
           } catch (err) {
             logger.error(`Python Job ${job.id} failed`, err);
             throw err;

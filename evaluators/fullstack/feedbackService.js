@@ -16,31 +16,49 @@ function getClient() {
   return _client;
 }
 
-export async function generateFullstackFeedback(backendResults, frontendResults, rubric) {
+export async function generateFullstackFeedback(backendResultsOrTestDetails, frontendResults, rubric) {
   if (!process.env.GROQ_API_KEY) {
     return "AI-generated feedback is currently unavailable.";
   }
 
-  const backendFailures = backendResults.test_details.filter((t) => t.status === "fail");
-  const frontendFailures = frontendResults.test_details.filter((t) => t.status === "fail");
+  let failureContext = "";
+  let rubricCriteria = [];
 
-  if (backendFailures.length === 0 && frontendFailures.length === 0) {
-    return "Excellent work! Both your backend API and frontend UI passed all tests. Your fullstack implementation is solid — keep it up!";
+  if (Array.isArray(backendResultsOrTestDetails)) {
+    // New unified testDetails format
+    const testDetails = backendResultsOrTestDetails;
+    const failures = testDetails.filter((t) => t.status === "fail");
+    if (failures.length === 0) {
+      return "Excellent work! Both your backend API and frontend UI passed all tests. Your fullstack implementation is solid — keep it up!";
+    }
+    failureContext = failures
+      .map((f) => `Test: ${f.name}\n  Error: ${f.error?.slice(0, 250) ?? "Unknown error"}`)
+      .join("\n\n");
+    rubricCriteria = frontendResults?.criteria || []; // the 2nd arg behaves as rubric
+  } else {
+    // Old format
+    const backendResults = backendResultsOrTestDetails || { test_details: [] };
+    const frontendResultsObj = frontendResults || { test_details: [] };
+    const backendFailures = (backendResults.test_details || []).filter((t) => t.status === "fail");
+    const frontendFailures = (frontendResultsObj.test_details || []).filter((t) => t.status === "fail");
+
+    if (backendFailures.length === 0 && frontendFailures.length === 0) {
+      return "Excellent work! Both your backend API and frontend UI passed all tests. Your fullstack implementation is solid — keep it up!";
+    }
+
+    const formatFailures = (failures, layer) =>
+      failures
+        .map((f) => `[${layer}] Test: ${f.name}\n  Error: ${f.error?.slice(0, 250) ?? "Unknown error"}`)
+        .join("\n");
+
+    failureContext = [
+      backendFailures.length ? formatFailures(backendFailures, "Backend") : "",
+      frontendFailures.length ? formatFailures(frontendFailures, "Frontend") : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    rubricCriteria = rubric?.criteria || [];
   }
-
-  const formatFailures = (failures, layer) =>
-    failures
-      .map(
-        (f) => `[${layer}] Test: ${f.name}\n  Error: ${f.error?.slice(0, 250) ?? "Unknown error"}`
-      )
-      .join("\n");
-
-  const failureContext = [
-    backendFailures.length ? formatFailures(backendFailures, "Backend") : "",
-    frontendFailures.length ? formatFailures(frontendFailures, "Frontend") : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
 
   const prompt = `
 You are an encouraging Senior Fullstack Developer performing a code review for a student.
@@ -50,7 +68,7 @@ Below are the failed tests from an automated evaluation of their fullstack proje
 ${failureContext}
 
 ### Rubric:
-${rubric.criteria.map((c) => `- [${c.layer ?? "general"}] ${c.name} (weight: ${c.weight})`).join("\n")}
+${rubricCriteria.map((c) => `- [${c.layer ?? "general"}] ${c.name} (weight: ${c.weight})`).join("\n")}
 
 ### Instructions:
 1. Give brief (3-5 sentences) technical advice covering both backend and frontend issues.

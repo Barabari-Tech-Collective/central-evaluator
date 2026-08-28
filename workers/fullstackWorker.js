@@ -4,7 +4,7 @@ import queueManager from '../config/queueManager.js';
 import logger from '../config/logger.js';
 import { triggerGraderWorkflow } from '../services/githubActionService.js';
 import { withTimeout } from '../evaluators/react/utils/timeout.js';
-import { evaluateReactProject as evaluateFullstackProject } from "../evaluators/react/evaluatorService.js";
+import { evaluateFullstackProject } from "../evaluators/fullstack/evaluatorService.js";
 import { webhookPubSub } from '../services/webhookPubSub.js';
 
 let fullstackWorker = null;
@@ -28,7 +28,11 @@ export async function initializeFullstackWorker() {
               
               const webhookUrl = `${process.env.BASE_URL}/api/webhook/github`;
               const repoUrl = job.data.repoUrl || job.data.submission_link;
-              await triggerGraderWorkflow(repoUrl, job.id, webhookUrl, 'run-fullstack-evaluation');
+              const specFile = job.data.rubric?.specFile || null;
+              await triggerGraderWorkflow(repoUrl, job.id, webhookUrl, 'run-fullstack-evaluation', {
+                rubric: job.data.rubric,
+                specFile
+              });
               
               return await webhookPromise;
             })(),
@@ -37,19 +41,17 @@ export async function initializeFullstackWorker() {
           );
 
           // Phase 2: Handle GitHub result
-          if (githubResult.status !== 'completed' || (githubResult.testOutput || '').toLowerCase().includes('build: failed')) {
-            logger.info(`Fullstack Job ${job.id} failed build on GitHub Actions.`);
-            return {
-              score: 0,
-              feedback: `Your application failed to build. Linter/Build Report:\n\n${githubResult.testOutput || 'Unknown Build Error'}`,
-              details: []
-            };
+          const buildFailed = githubResult.status !== 'completed' || !githubResult.testResults;
+          if (buildFailed) {
+            logger.info(`Fullstack Job ${job.id} had run failure on GitHub Actions. Still running AI rubric scoring for partial credit.`);
+          } else {
+            logger.info(`GitHub Action completed successfully for Fullstack Job ${job.id}. Proceeding to rubric evaluation.`);
           }
 
-          // Phase 3: Token-optimized AI Scoring
-          logger.info(`GitHub Action completed successfully for Fullstack Job ${job.id}. Proceeding to AI rubric evaluation.`);
-          const githubReport = githubResult.testOutput || 'Build and Linter Passed.';
-          const results = await evaluateFullstackProject(job.data, job.id, githubReport); // passing report
+          // Phase 3: Evaluate with Playwright test results or fallback to AI scoring
+          const githubReport = githubResult.testOutput || (buildFailed ? 'Run: Failed. The test execution encountered an error.' : 'Run Completed.');
+          logger.info(`RAW PLAYWRIGHT RESULTS FOR JOB ${job.id}: ${JSON.stringify(githubResult.testResults)}`);
+          const results = await evaluateFullstackProject(job.data, job.id, githubResult.testResults, githubReport);
           
           logger.info(`Fullstack Job ${job.id} completed entirely.`);
           return { success: true, results };

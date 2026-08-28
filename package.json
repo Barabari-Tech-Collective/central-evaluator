@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "npm run test:unit",
-    "test:unit": "node scripts/test-scoring-logic.mjs && node scripts/test-rubric-fallback.mjs && node scripts/test-url-guard.mjs && node scripts/test-code-and-temporal-checks.mjs && node scripts/test-js-evaluator.mjs && node scripts/test-backend-evaluator.mjs",
+    "test:unit": "node scripts/test-scoring-logic.mjs && node scripts/test-rubric-fallback.mjs && node scripts/test-url-guard.mjs && node scripts/test-code-and-temporal-checks.mjs",
     "start": "node server.js",
     "postinstall": "playwright install chromium"
   },

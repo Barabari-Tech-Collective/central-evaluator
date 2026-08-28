@@ -65,3 +65,109 @@ function ratio(passed, total) {
   if (!total) return 0;
   return passed / total;
 }
+
+/**
+ * Helper to compute evaluation score from Playwright JSON report.
+ */
+export function scoreFromTestResults(rubric, testResults) {
+  if (!testResults || testResults.error || !Array.isArray(testResults.suites)) {
+    return null;
+  }
+
+  // Flatten all tests from the Playwright suites
+  const assertions = [];
+  
+  function recurseSuites(suite) {
+    if (Array.isArray(suite.suites)) {
+      suite.suites.forEach(recurseSuites);
+    }
+    if (Array.isArray(suite.specs)) {
+      suite.specs.forEach(spec => {
+        const title = spec.title || "";
+        const testRun = spec.tests?.[0];
+        const result = testRun?.results?.[0];
+        const status = result?.status || "failed";
+        const failureMessage = result?.error?.message || "Test failed";
+        
+        assertions.push({
+          title,
+          status: status === "passed" ? "passed" : "failed",
+          failureMessage
+        });
+      });
+    }
+  }
+
+  testResults.suites.forEach(recurseSuites);
+
+  if (assertions.length === 0) {
+    return null;
+  }
+
+  const breakdown = {};
+  const reasons = {};
+  const multipliers = {};
+  let totalScore = 0;
+
+  // Group tests by rubric name prefix
+  const categoryStats = {};
+  const criteria = rubric.criteria || [];
+  for (const c of criteria) {
+    categoryStats[c.name] = { passed: 0, total: 0, failedDetails: [] };
+  }
+
+  for (const assertion of assertions) {
+    const title = assertion.title || "";
+    const status = assertion.status;
+    
+    // Find matching rubric
+    let matchedCriterion = null;
+    for (const c of criteria) {
+      if (title.toLowerCase().startsWith(c.name.toLowerCase())) {
+        matchedCriterion = c.name;
+        break;
+      }
+    }
+
+    if (matchedCriterion) {
+      categoryStats[matchedCriterion].total++;
+      if (status === "passed") {
+        categoryStats[matchedCriterion].passed++;
+      } else {
+        const cleanedError = (assertion.failureMessage || "Test failed")
+          .split('\n')[0]
+          .replace(/\x1B\[\d+m/g, ""); // Strip ANSI colors
+        categoryStats[matchedCriterion].failedDetails.push(cleanedError);
+      }
+    }
+  }
+
+  // Calculate scores
+  for (const c of criteria) {
+    const stats = categoryStats[c.name];
+    if (stats && stats.total > 0) {
+      const multiplier = stats.passed / stats.total;
+      const score = Math.round(multiplier * c.weight);
+      breakdown[c.name] = score;
+      multipliers[c.name] = Math.round(multiplier * 10) / 10;
+      
+      if (stats.failedDetails.length === 0) {
+        reasons[c.name] = `Passed all ${stats.total} Playwright checks.`;
+      } else {
+        reasons[c.name] = `Failed ${stats.failedDetails.length}/${stats.total} checks. Errors: ${stats.failedDetails.join('; ')}`;
+      }
+    } else {
+      breakdown[c.name] = 0;
+      multipliers[c.name] = 0.0;
+      reasons[c.name] = "No tests found or executed for this criterion.";
+    }
+    totalScore += breakdown[c.name];
+  }
+
+  return {
+    score: totalScore,
+    rubric_breakdown: breakdown,
+    reasons,
+    multipliers
+  };
+}

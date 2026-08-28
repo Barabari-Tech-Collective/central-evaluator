@@ -26,7 +26,7 @@ export async function initializeBackendWorker() {
               if (job.data.ideFiles) {
                 logger.info(`Backend Job ${job.id} is an IDE submission. Skipping GitHub Actions.`);
                 const githubCodeContext = job.data.ideFiles.map(f => `--- ${f.name} ---\n${f.content}`).join('\n\n');
-                return await evaluateBackendProject(job.data, job.id, githubCodeContext);
+                return await evaluateBackendProject(job.data, job.id, null, null, githubCodeContext);
               }
 
               // Phase 1: Wait for webhook & Dispatch to GitHub Actions
@@ -35,25 +35,27 @@ export async function initializeBackendWorker() {
               
               const webhookUrl = `${process.env.BASE_URL}/api/webhook/github`;
               const repoUrl = job.data.repoUrl || job.data.submission_link;
-              await triggerGraderWorkflow(repoUrl, job.id, webhookUrl, 'run-backend-evaluation');
+              const specFile = job.data.rubric?.specFile || null;
+              await triggerGraderWorkflow(repoUrl, job.id, webhookUrl, 'run-backend-evaluation', {
+                rubric: job.data.rubric,
+                specFile
+              });
               
               // Now await the result
               const githubResult = await webhookPromise;
 
               // Phase 2: Handle GitHub result
-              if (githubResult.status !== 'completed' || !githubResult.testOutput) {
-                logger.info(`Backend Job ${job.id} failed on GitHub Actions or returned no code.`);
-                return {
-                  score: 0,
-                  feedback: `Evaluation workflow failed to retrieve source code or encountered an error.\n\n${githubResult.testOutput || 'Unknown Error'}`,
-                  rubric_breakdown: []
-                };
+              const buildFailed = githubResult.status !== 'completed' || !githubResult.testResults;
+
+              if (buildFailed) {
+                logger.info(`Backend Job ${job.id} had run failure on GitHub Actions. Still running AI rubric scoring for partial credit.`);
+              } else {
+                logger.info(`GitHub Action completed successfully for Backend Job ${job.id}. Proceeding to rubric evaluation.`);
               }
 
-              // Phase 3: Token-optimized AI Scoring
-              logger.info(`GitHub Action completed successfully for Backend Job ${job.id}. Proceeding to AI rubric evaluation.`);
-              const githubCodeContext = githubResult.testOutput;
-              return await evaluateBackendProject(job.data, job.id, githubCodeContext);
+              // Phase 3: Evaluate with Jest test results or fallback to AI scoring
+              const githubReport = githubResult.testOutput || (buildFailed ? 'Run: Failed. The test execution encountered an error.' : 'Run Completed.');
+              return await evaluateBackendProject(job.data, job.id, githubResult.testResults, githubReport);
             })(),
             config.timeout,
             `backend-eval-job ${job.id}`

@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { evaluate } from './controller/evaluatorController.js';
+
 import queueManager from './config/queueManager.js';
 import logger from './config/logger.js';
 import redisConnection from './config/redis.js';
@@ -78,6 +79,8 @@ async function startServer() {
     // 4. API routes (V-04: rate limit + API-key auth)
     app.post('/evaluate', evaluateRateLimiter, requireApiKey, evaluate);
     app.use('/api/webhook', webhookRouter);
+
+
 
     // 5. Health check endpoints
     app.get('/health', (req, res) => {

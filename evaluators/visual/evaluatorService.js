@@ -95,10 +95,16 @@ export async function evaluateStudentsWithVision({
 
   // Missing required files: bail out BEFORE spinning up a server/browser (V-06).
   if (student.flags.length > 0) {
+    const summary = `Missing required files for evaluation: ${student.flags.join(", ")}`;
     results.push({
       name,
       score: 0,
-      feedback: `Missing files: ${student.flags.join(", ")}`,
+      feedback: {
+        summary,
+        strengths: [],
+        issues: [summary],
+        breakdown: []
+      },
       manualCorrection: true
     });
     return results;
@@ -178,6 +184,18 @@ export async function evaluateStudentsWithVision({
       const badStatus = httpStatus >= 400;
       if (blank || badStatus) {
         const score = assembleScore({ rubric, domScore, behaviorScore, visualScore: 0, codeScore });
+        const summary = badStatus
+          ? `The page returned HTTP ${httpStatus} — it may not be a built/hosted site. Needs manual review.`
+          : `The page rendered blank (no visible content). If this is an unbuilt React/Vue app, evaluate the built/hosted site instead. Needs manual review.`;
+        
+        const domBreakdown = buildDomBreakdown(rubric, domResults);
+        const behaviorBreakdown = buildBehaviorBreakdown(rubric, behaviorResults);
+        const unifiedBreakdown = [
+          ...domBreakdown.map(b => ({ item: b.item, awarded: 0, max: b.max, reason: "Page failed to render or returned an error status." })),
+          ...behaviorBreakdown.map(b => ({ item: b.item, awarded: 0, max: b.max, reason: "Page failed to render or returned an error status." })),
+          ...(codeBreakdown || []).map(b => ({ item: b.item, awarded: b.awarded, max: b.max, reason: b.awarded === b.max ? "Code checks passed." : "Code checks failed." }))
+        ];
+
         results.push({
           name,
           studentId,
@@ -185,12 +203,15 @@ export async function evaluateStudentsWithVision({
           ...score,
           manualReviewItems: manualReviewItems(rubric),
           manualReviewDetail: manualReviewDetail(rubric),
-          domBreakdown: buildDomBreakdown(rubric, domResults),
-          behaviorBreakdown: buildBehaviorBreakdown(rubric, behaviorResults),
+          domBreakdown,
+          behaviorBreakdown,
           codeBreakdown,
-          feedback: badStatus
-            ? `The page returned HTTP ${httpStatus} — it may not be a built/hosted site. Needs manual review.`
-            : `The page rendered blank (no visible content). If this is an unbuilt React/Vue app, evaluate the built/hosted site instead. Needs manual review.`,
+          feedback: {
+            summary,
+            strengths: [],
+            issues: [summary],
+            breakdown: unifiedBreakdown
+          },
           manualCorrection: true,
           blankPage: true
         });
@@ -255,6 +276,88 @@ export async function evaluateStudentsWithVision({
 
       const score = assembleScore({ rubric, domScore, behaviorScore, visualScore, codeScore });
       const needsManual = manualReviewItems(rubric);
+ 
+      const domBreakdown = buildDomBreakdown(rubric, domResults);
+      const behaviorBreakdown = buildBehaviorBreakdown(rubric, behaviorResults);
+      
+      const strengths = [];
+      const issues = [];
+
+      domBreakdown.forEach(b => {
+        if (b.awarded === b.max) {
+          strengths.push(`[${b.item}] Perfect DOM layout (earned ${b.max}/${b.max} marks)`);
+        } else if (b.awarded > 0) {
+          issues.push(`[${b.item}] Partially correct DOM structure. Some required elements are missing (earned ${b.awarded}/${b.max} marks)`);
+        } else {
+          issues.push(`[${b.item}] Missing/Incorrect DOM layout. Expected elements not found (earned 0/${b.max} marks)`);
+        }
+      });
+
+      behaviorBreakdown.forEach(b => {
+        if (b.awarded === b.max) {
+          strengths.push(`[${b.item}] Perfect dynamic interactivity (earned ${b.max}/${b.max} marks)`);
+        } else {
+          issues.push(`[${b.item}] Dynamic interaction failed: functionality check did not pass (earned 0/${b.max} marks)`);
+        }
+      });
+
+      (codeBreakdown || []).forEach(b => {
+        if (b.awarded === b.max) {
+          strengths.push(`[${b.item}] Proper code quality & API checks passed (earned ${b.max}/${b.max} marks)`);
+        } else {
+          issues.push(`[${b.item}] Code requirement failed: missing expected methods or patterns (earned 0/${b.max} marks)`);
+        }
+      });
+
+      visualBreakdown.forEach(b => {
+        if (b.max === 0) return; // Skip 0-weight/placeholder visual items
+        if (b.awarded === b.max) {
+          strengths.push(`[Visual: ${b.item}] Design looks correct and matches reference layout (earned ${b.max}/${b.max} marks)`);
+        } else {
+          issues.push(`[Visual: ${b.item}] Design layout mismatch: ${b.reason || "differs from expected reference"} (earned ${b.awarded}/${b.max} marks)`);
+        }
+      });
+
+      const unifiedBreakdown = [
+        ...domBreakdown.map(b => ({
+          item: b.item,
+          awarded: b.awarded,
+          max: b.max,
+          reason: b.awarded === b.max ? "Perfect implementation. All element checks passed." : "Incorrect element tags, classes, or missing DOM items."
+        })),
+        ...behaviorBreakdown.map(b => ({
+          item: b.item,
+          awarded: b.awarded,
+          max: b.max,
+          reason: b.awarded === b.max ? "Perfect functionality. All interaction tests passed." : "Incorrect implementation. Interaction check failed."
+        })),
+        ...(codeBreakdown || []).map(b => ({
+          item: b.item,
+          awarded: b.awarded,
+          max: b.max,
+          reason: b.awarded === b.max ? "Correct source code constructs and API usage." : "Missing required JavaScript functions, setInterval, or Date api."
+        })),
+        ...visualBreakdown.filter(b => b.max > 0).map(b => ({
+          item: b.item,
+          awarded: b.awarded,
+          max: b.max,
+          reason: b.reason || "Visual layout style differences."
+        }))
+      ];
+
+      let summaryText = "";
+      if (score.total === score.maxTotal) {
+        summaryText = "Excellent work! Your submission meets all requirements. The DOM layout, behavior functions, and code quality checks are 100% correct.";
+      } else if (score.total === 0) {
+        summaryText = "None of the rubric criteria passed. Your page is either completely blank, has wrong DOM element tags/IDs, or did not implement the required functionality.";
+      } else {
+        summaryText = `Your submission passed partially with a score of ${score.total}/${score.maxTotal}. Please review the strengths and issues below for concrete areas of improvement.`;
+      }
+
+      const visionFeedbackText = typeof visionFeedback === 'object' ? (visionFeedback.feedback || "") : (typeof visionFeedback === 'string' ? visionFeedback : "");
+      if (visionFeedbackText.trim()) {
+        summaryText += " Visual Evaluation Feedback: " + visionFeedbackText;
+      }
 
       results.push({
         name,
@@ -263,11 +366,16 @@ export async function evaluateStudentsWithVision({
         ...score, // domScore, behaviorScore, visualScore, codeScore, total, maxTotal, normalized, pendingManualPoints
         manualReviewItems: needsManual,
         manualReviewDetail: manualReviewDetail(rubric),
-        domBreakdown: buildDomBreakdown(rubric, domResults),
-        behaviorBreakdown: buildBehaviorBreakdown(rubric, behaviorResults),
+        domBreakdown,
+        behaviorBreakdown,
         codeBreakdown,
         visualBreakdown,
-        feedback: visionFeedback,
+        feedback: {
+          summary: summaryText,
+          strengths,
+          issues,
+          breakdown: unifiedBreakdown
+        },
         manualCorrection: needsManual.length > 0
       });
     } catch (err) {

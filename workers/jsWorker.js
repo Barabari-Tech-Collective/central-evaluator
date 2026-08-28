@@ -88,27 +88,100 @@ export async function initializeJsWorker() {
             `js-eval ${job.id}`
           );
           
-          logger.info(`JS Job ${job.id} completed via GitHub Actions. Generating AI feedback...`);
-          
-          const aiFeedbackString = await generateJSAIFeedback(job.data, results);
-          results.feedback = aiFeedbackString;
           let finalScore = 0;
+          let passedCount = 0;
+          let totalCount = 0;
+
           // GitHub Actions sends back evaluation as either:
           //   - An object  { passed, score, feedback }  (script mode)
           //   - An array   [{ passed, score }, ...]     (function mode, one entry per test case)
           // Handle both shapes so we never silently return 0.
           if (Array.isArray(results)) {
-            // function mode — array of per-test-case results
-            const total = results.length;
-            const passed = results.filter(r => r.passed).length;
-            finalScore = total > 0 ? (passed / total) * 100 : 0;
+            // function mode — array of per-test-case results (legacy fallback)
+            totalCount = results.length;
+            passedCount = results.filter(r => r.passed).length;
+            finalScore = totalCount > 0 ? (passedCount / totalCount) * 100 : 0;
           } else if (typeof results?.score === 'number') {
-            // script mode — single result object with a numeric score
+            // New script/function mode — single result object with a numeric score
             finalScore = results.score;
+            // Attempt to extract passed/total from the feedback string (e.g. "Passed 3 of 4 tests")
+            const match = (results.feedback || '').match(/(\d+)\s*of\s*(\d+)/);
+            if (match) {
+              passedCount = parseInt(match[1], 10);
+              totalCount = parseInt(match[2], 10);
+            } else {
+              totalCount = 100;
+              passedCount = finalScore;
+            }
           } else if (evaluationMode === 'script') {
             // fallback: treat passed as binary 0/100
             finalScore = results?.passed ? 100 : 0;
+            totalCount = 1;
+            passedCount = results?.passed ? 1 : 0;
           }
+
+          const globalPassRatio = finalScore / 100;
+
+          let rubric = null;
+          if (job.data.rubricText && job.data.rubricText !== 'Standard evaluation') {
+            try {
+              let r = job.data.rubricText;
+              while (typeof r === 'string') {
+                r = JSON.parse(r);
+              }
+              if (Array.isArray(r)) {
+                rubric = { criteria: r };
+              } else if (r && r.criteria && Array.isArray(r.criteria)) {
+                rubric = r;
+              }
+            } catch(e) {
+               logger.warn(`Failed to parse rubricText for JS Job ${job.id}: ${e.message}`);
+            }
+          }
+
+          const breakdown = [];
+          const strengths = [];
+          const issues = [];
+
+          if (rubric && rubric.criteria && rubric.criteria.length > 0) {
+            finalScore = 0; // Recalculate based on rubric weights
+            for (const c of rubric.criteria) {
+               const maxPts = typeof c.weight === 'number' ? c.weight : (typeof c.score === 'number' ? c.score : 0);
+               const awardedPts = Math.round(maxPts * globalPassRatio);
+               finalScore += awardedPts;
+
+               const reason = totalCount > 0 
+                  ? `Passed ${passedCount}/${totalCount} test cases.` 
+                  : "No test cases run.";
+
+               breakdown.push({
+                 item: c.name,
+                 awarded: awardedPts,
+                 max: maxPts,
+                 reason
+               });
+
+               if (globalPassRatio >= 1.0) {
+                 strengths.push(`[${c.name}] ${reason} (earned ${awardedPts}/${maxPts} marks)`);
+               } else if (globalPassRatio >= 0.5) {
+                 strengths.push(`[${c.name}] ${reason} (earned ${awardedPts}/${maxPts} marks)`);
+                 issues.push(`[${c.name}] Missed some test cases. (earned ${awardedPts}/${maxPts} marks)`);
+               } else {
+                 issues.push(`[${c.name}] ${reason} (earned ${awardedPts}/${maxPts} marks)`);
+               }
+            }
+          }
+
+          logger.info(`JS Job ${job.id} completed via GitHub Actions. Generating AI feedback...`);
+          
+          const summaryStr = await generateJSAIFeedback(job.data, results, finalScore);
+          
+          const aiFeedbackString = {
+            summary: summaryStr,
+            strengths: strengths.length > 0 ? strengths : (finalScore === 100 ? ["Passed all tests."] : []),
+            issues: issues,
+            breakdown: breakdown
+          };
 
           return {
             success: true,

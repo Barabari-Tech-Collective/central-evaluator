@@ -16,7 +16,7 @@ function getClient() {
     apiKey,
   });
 
-  logger.info("OpenAI client initialised for JS Evaluator.");
+  logger.info("OpenAI client initialised for Python Evaluator.");
   return client;
 }
 
@@ -53,13 +53,13 @@ async function fetchStudentCode(repoUrl) {
 }
 
 /**
- * Generates AI-assisted feedback for a student's JavaScript submission.
+ * Generates AI-assisted feedback for a student's Python submission.
  *
  * @param {Object} jobData      - The raw BullMQ job data containing testCases, expectedLogs, etc.
- * @param {Object} githubResult - The result returned from the GitHub Action { passed, score, feedback }
- * @returns {Promise<string>}   - A JSON stringified object matching the FeedbackCell structure
+ * @param {Object} githubResult - The result returned from the GitHub Action
+ * @returns {Promise<string>}   - A single plain-text summary paragraph
  */
-export async function generateJSAIFeedback(jobData, githubResult, finalScore) {
+export async function generatePythonAIFeedback(jobData, githubResult, finalScore) {
   const openai = getClient();
   const rawFeedback = typeof githubResult?.feedback === 'string' ? githubResult.feedback : JSON.stringify(githubResult);
 
@@ -85,13 +85,13 @@ export async function generateJSAIFeedback(jobData, githubResult, finalScore) {
 
   // 3. Build the Prompt
   const prompt = `
-You are a Javascript coding instructor reviewing a student's assignment.
+You are a Python coding instructor reviewing a student's assignment.
 
 ## Assignment Requirements:
 ${requirements}
 
 ## Student's Code (first 2000 chars):
-\`\`\`javascript
+\`\`\`python
 ${studentCode}
 \`\`\`
 
@@ -99,13 +99,13 @@ ${studentCode}
 Score: ${finalScore}/100
 Raw Grader Output: ${rawFeedback}
 
-Write a single, encouraging paragraph (2-3 sentences max) summarizing their attempt and explaining exactly why they failed the test cases (e.g. syntax error, didn't match logs exactly, wrong function output).
+Write a single, encouraging paragraph (2-3 sentences max) summarizing their attempt and explaining exactly why they failed the test cases (e.g. syntax error, didn't match prints exactly, wrong function output).
 Do NOT mention the numeric score.
 Do NOT use markdown. Just plain text.
 `.trim();
 
   try {
-    logger.info("Sending JS code to OpenAI for feedback generation...");
+    logger.info("Sending Python code to OpenAI for feedback generation...");
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -119,7 +119,7 @@ Do NOT use markdown. Just plain text.
     
     return feedbackString || "Evaluation completed.";
   } catch (err) {
-    logger.error("OpenAI API call failed for JS feedback:", err.message);
+    logger.error("OpenAI API call failed for Python feedback:", err.message);
     // Fall back gracefully
     return "Evaluation completed. Some test cases failed.";
   }

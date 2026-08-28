@@ -40,19 +40,22 @@ export async function initializeReactWorker() {
               const githubResult = await webhookPromise;
 
               // Phase 2: Handle GitHub result
-              if (githubResult.status !== 'completed' || (githubResult.testOutput || '').toLowerCase().includes('build: failed')) {
-                logger.info(`React Job ${job.id} failed build on GitHub Actions.`);
-                return {
-                  score: 0,
-                  feedback: `Your application failed to build. Linter/Build Report:\n\n${githubResult.testOutput || 'Unknown Build Error'}`,
-                  rubric_breakdown: []
-                };
+              const buildFailed = githubResult.status !== 'completed' ||
+                (githubResult.testOutput || '').toLowerCase().includes('build: failed') ||
+                (githubResult.testOutput || '').toLowerCase().includes('failed to compile');
+
+              if (buildFailed) {
+                logger.info(`React Job ${job.id} had build failure on GitHub Actions. Still running AI rubric scoring for partial credit.`);
+              } else {
+                logger.info(`GitHub Action completed successfully for React Job ${job.id}. Proceeding to AI rubric evaluation.`);
               }
 
-              // Phase 3: Token-optimized AI Scoring
-              logger.info(`GitHub Action completed successfully for React Job ${job.id}. Proceeding to AI rubric evaluation.`);
-              const githubReport = githubResult.testOutput || 'Build and Linter Passed.';
-              return await evaluateReactProject(job.data, job.id, githubReport);
+              // Phase 3: Always run AI rubric scoring (build report is passed as context)
+              // Build failures penalise relevant criteria (UI/CSS), but students still
+              // get credit for state management, function logic, etc that can be
+              // assessed from the source code alone.
+              const githubReport = githubResult.testOutput || (buildFailed ? 'Build: Failed. The application could not be compiled.' : 'Build and Linter Passed.');
+              return await evaluateReactProject(job.data, job.id, githubReport, githubResult.testResults);
             })(),
             config.timeout,
             `react-eval-job ${job.id}`

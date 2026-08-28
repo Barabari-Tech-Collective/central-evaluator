@@ -38,7 +38,7 @@ function getClient() {
  *
  * @returns {Promise<string>} feedback - A constructive paragraph of feedback
  */
-export async function generateAIFeedback({ rubric_breakdown, score, warnings, execution_logs }) {
+export async function generateAIFeedback({ rubric_breakdown, rubric_criteria, per_criterion_reasons, score, warnings, execution_logs }) {
   const openai = getClient();
 
   // Fall back to rule-based summary if Groq is not configured
@@ -46,58 +46,60 @@ export async function generateAIFeedback({ rubric_breakdown, score, warnings, ex
     return buildFallbackFeedback(rubric_breakdown, score, warnings);
   }
 
-  // Build a concise criteria summary for the prompt
+  // Build a detailed per-criterion breakdown for the prompt
   const criteriaLines = Object.entries(rubric_breakdown)
-    .map(([name, points]) =>
-      `- ${name}: ${points > 0 ? `PASSED (${points} pts)` : "FAILED (0 pts)"}`
-    )
-    .join("\n");
-
-  const failedItems = warnings.join("; ") || "None";
+    .map(([name, points]) => {
+      const maxPts = rubric_criteria?.find(c => c.name === name)?.weight ?? '?';
+      const reason = per_criterion_reasons?.[name] || '';
+      const status = points > 0 && points === maxPts ? '✅ FULL MARKS' : points > 0 ? '⚠️ PARTIAL MARKS' : '❌ ZERO MARKS';
+      return `- ${name}: ${status} (${points}/${maxPts} pts)${reason ? '\n  AI Analysis: ' + reason : ''}`;
+    })
+    .join('\n');
 
   // Trim logs to avoid exceeding token limits
   const logSnippet = execution_logs
-    ? execution_logs.slice(-1500)
-    : "No logs available.";
+    ? execution_logs.slice(-800)
+    : 'No logs available.';
+
+  const buildFailed = execution_logs?.toLowerCase().includes('build: failed') ||
+    execution_logs?.toLowerCase().includes('error') && execution_logs?.toLowerCase().includes('failed');
 
   const prompt = `
-You are a coding instructor reviewing a student's React assignment submission.
+You are a strict but constructive React instructor writing an overall summary for a student's graded assignment.
 
-Here are the automated evaluation results:
-Score: ${score}/100
+${buildFailed ? 'NOTE: The student\'s application FAILED TO BUILD. All feature-level criteria are 0.' : ''}
 
-Criteria Results:
+Here is the per-criterion grading:
 ${criteriaLines}
 
-Issues Detected:
-${failedItems}
+Total: ${score}/100
 
-Relevant Execution Logs (last 1500 chars):
-${logSnippet}
-
-Write 2–3 sentences of constructive, encouraging feedback for the student.
-- Mention what they did well (passed criteria).
-- Clearly point out what needs improvement (failed criteria).
-- Suggest one actionable improvement tip.
-- Do NOT mention the score number. Keep it friendly and educational.
+Write 3-4 sentences of honest, direct overall feedback:
+- Start by directly stating what the student achieved (e.g. "You successfully set up your project and implemented state management correctly.")
+- For each criterion that has ZERO MARKS, be direct and say EXACTLY what was missing (e.g. "However, your handleDelete and handleCheck functions were not implemented at all.")
+- For partial marks, explain specifically what part worked and what part did not
+- End with one clear, specific actionable tip the student can use to improve
+- Do NOT say generic things like "great job" if key features are missing
+- Do NOT mention the score number
+- Tone: honest, educational, not harsh
 `.trim();
 
   try {
-    logger.debug("Sending prompt to Groq...");
+    logger.debug('Sending prompt to Groq...');
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",   // OpenAI model
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 250,
-      temperature: 0.6,
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 350,
+      temperature: 0.4,
     });
 
     const feedback = response.choices[0]?.message?.content?.trim();
-    logger.info("AI feedback received from Groq.");
+    logger.info('AI feedback received from Groq.');
     return feedback || buildFallbackFeedback(rubric_breakdown, score, warnings);
 
   } catch (err) {
-    logger.error("Groq API call failed:", err.message);
+    logger.error('Groq API call failed:', err.message);
     // Never let AI failure break evaluation — fall back gracefully
     return buildFallbackFeedback(rubric_breakdown, score, warnings);
   }

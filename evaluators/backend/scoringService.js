@@ -90,3 +90,83 @@ export const evaluateResults = (rubric, testResults) => {
         pass: isPass
     };
 };
+
+/**
+ * Helper to compute evaluation score from Jest JSON report.
+ */
+export function scoreFromTestResults(rubric, testResults) {
+  if (!testResults || testResults.error || !Array.isArray(testResults.testResults)) {
+    return null;
+  }
+  const assertions = testResults.testResults?.[0]?.assertionResults || [];
+  if (assertions.length === 0) {
+    return null;
+  }
+
+  const breakdown = {};
+  const reasons = {};
+  const multipliers = {};
+  let totalScore = 0;
+
+  // Group tests by rubric name prefix
+  const categoryStats = {};
+  const criteria = rubric.criteria || [];
+  for (const c of criteria) {
+    categoryStats[c.name] = { passed: 0, total: 0, failedDetails: [] };
+  }
+
+  for (const assertion of assertions) {
+    const title = assertion.title || "";
+    const status = assertion.status; // "passed" or "failed"
+    
+    // Find matching rubric
+    let matchedCriterion = null;
+    for (const c of criteria) {
+      if (title.toLowerCase().startsWith(c.name.toLowerCase())) {
+        matchedCriterion = c.name;
+        break;
+      }
+    }
+
+    if (matchedCriterion) {
+      categoryStats[matchedCriterion].total++;
+      if (status === "passed") {
+        categoryStats[matchedCriterion].passed++;
+      } else {
+        const cleanedError = (assertion.failureMessages?.[0] || "Test assertion failed")
+          .split('\n')[0] // Only get the first line of the error to keep it simple and clean
+          .replace(/\x1B\[\d+m/g, ""); // Strip ANSI colors
+        categoryStats[matchedCriterion].failedDetails.push(cleanedError);
+      }
+    }
+  }
+
+  // Calculate scores
+  for (const c of criteria) {
+    const stats = categoryStats[c.name];
+    if (stats && stats.total > 0) {
+      const multiplier = stats.passed / stats.total;
+      const score = Math.round(multiplier * c.weight);
+      breakdown[c.name] = score;
+      multipliers[c.name] = Math.round(multiplier * 10) / 10;
+      
+      if (stats.failedDetails.length === 0) {
+        reasons[c.name] = `Passed all ${stats.total} unit tests.`;
+      } else {
+        reasons[c.name] = `Failed ${stats.failedDetails.length}/${stats.total} tests. Errors: ${stats.failedDetails.join('; ')}`;
+      }
+    } else {
+      breakdown[c.name] = 0;
+      multipliers[c.name] = 0.0;
+      reasons[c.name] = "No tests found or executed for this criterion.";
+    }
+    totalScore += breakdown[c.name];
+  }
+
+  return {
+    score: totalScore,
+    rubric_breakdown: breakdown,
+    reasons,
+    multipliers
+  };
+}

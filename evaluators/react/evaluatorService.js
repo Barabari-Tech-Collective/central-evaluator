@@ -17,9 +17,10 @@ import path from "path";
  * @param {Object} payload - { repoUrl, rubric, submissionId, ... }
  * @param {string} jobId   - BullMQ job ID
  * @param {string} githubReport - Build/Linter report from GitHub Actions
+ * @param {string} testResults - Test suite results
  * @returns {Promise<Object>} - { score, rubric_breakdown, feedback, status, ... }
  */
-export async function evaluateReactProject(payload, jobId, githubReport) {
+export async function evaluateReactProject(payload, jobId, githubReport, testResults) {
   let repoPath;
   try {
     logger.info(`React evaluation started for job ${jobId}: ${payload.repoUrl}`);
@@ -29,7 +30,7 @@ export async function evaluateReactProject(payload, jobId, githubReport) {
     logger.info(`Cloned repo to: ${repoPath}`);
 
     // Step 2: AI-based scoring against the rubric, using the compressed code + github report
-    const finalResult = await scoreSubmission(payload.rubric, repoPath, githubReport);
+    const finalResult = await scoreSubmission(payload.rubric, repoPath, githubReport, testResults);
 
     logger.info(`React evaluation completed for job ${jobId}: score=${finalResult.score}`);
 
