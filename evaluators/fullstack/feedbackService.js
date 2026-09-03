@@ -1,44 +1,51 @@
 import OpenAI from "openai";
-import grok from "groq-sdk";
 import dotenv from "dotenv";
+import logger from "../../config/logger.js";
 
 dotenv.config();
 
-// V-42: lazy init so a missing GROQ_API_KEY doesn't crash the server at boot.
-let _client;
-function getClient() {
-  if (!_client) {
-    _client = new OpenAI({
-      apiKey: process.env.GROQ_API_KEY,
-      baseURL: process.env.GROQ_BASE_URL || "https://api.groq.com/openai/v1",
-    });
+let client = null;
+
+function getOpenAIClient() {
+  if (client) return client;
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    logger.warn("[FullstackFeedback] OPENAI_API_KEY is not set.");
+    return null;
   }
-  return _client;
+  client = new OpenAI({ apiKey });
+  return client;
 }
 
-export async function generateFullstackFeedback(backendResultsOrTestDetails, frontendResults, rubric) {
-  if (!process.env.GROQ_API_KEY) {
-    return "AI-generated feedback is currently unavailable.";
-  }
+/**
+ * Generates structured, educational AI feedback for a fullstack submission using OpenAI gpt-4o-mini.
+ *
+ * @param {Array|Object} backendResultsOrTestDetails - Playwright test details or backend results
+ * @param {Object} frontendResultsOrRubric - Frontend results or Rubric object
+ * @param {Object} [rubric] - Optional Rubric object
+ * @returns {Promise<string>}
+ */
+export async function generateFullstackFeedback(backendResultsOrTestDetails, frontendResultsOrRubric, rubric) {
+  const openai = getOpenAIClient();
 
   let failureContext = "";
   let rubricCriteria = [];
 
   if (Array.isArray(backendResultsOrTestDetails)) {
-    // New unified testDetails format
+    // Unified testDetails format
     const testDetails = backendResultsOrTestDetails;
     const failures = testDetails.filter((t) => t.status === "fail");
     if (failures.length === 0) {
       return "Excellent work! Both your backend API and frontend UI passed all tests. Your fullstack implementation is solid — keep it up!";
     }
     failureContext = failures
-      .map((f) => `Test: ${f.name}\n  Error: ${f.error?.slice(0, 250) ?? "Unknown error"}`)
+      .map((f) => `Test: ${f.name}\n  Error: ${f.error?.slice(0, 300) ?? "Unknown error"}`)
       .join("\n\n");
-    rubricCriteria = frontendResults?.criteria || []; // the 2nd arg behaves as rubric
+    rubricCriteria = frontendResultsOrRubric?.criteria || rubric?.criteria || [];
   } else {
-    // Old format
+    // Separate backend/frontend results format
     const backendResults = backendResultsOrTestDetails || { test_details: [] };
-    const frontendResultsObj = frontendResults || { test_details: [] };
+    const frontendResultsObj = frontendResultsOrRubric || { test_details: [] };
     const backendFailures = (backendResults.test_details || []).filter((t) => t.status === "fail");
     const frontendFailures = (frontendResultsObj.test_details || []).filter((t) => t.status === "fail");
 
@@ -48,7 +55,7 @@ export async function generateFullstackFeedback(backendResultsOrTestDetails, fro
 
     const formatFailures = (failures, layer) =>
       failures
-        .map((f) => `[${layer}] Test: ${f.name}\n  Error: ${f.error?.slice(0, 250) ?? "Unknown error"}`)
+        .map((f) => `[${layer}] Test: ${f.name}\n  Error: ${f.error?.slice(0, 300) ?? "Unknown error"}`)
         .join("\n");
 
     failureContext = [
@@ -57,39 +64,52 @@ export async function generateFullstackFeedback(backendResultsOrTestDetails, fro
     ]
       .filter(Boolean)
       .join("\n\n");
-    rubricCriteria = rubric?.criteria || [];
+    rubricCriteria = rubric?.criteria || frontendResultsOrRubric?.criteria || [];
+  }
+
+  if (!openai) {
+    return buildFallbackFeedback(failureContext, rubricCriteria);
   }
 
   const prompt = `
-You are an encouraging Senior Fullstack Developer performing a code review for a student.
-Below are the failed tests from an automated evaluation of their fullstack project.
+You are a senior fullstack engineering instructor writing an overall constructive review for a student's graded fullstack web assignment (React + Node/Express).
 
-### Failed Tests:
+### Automated Test Failures:
 ${failureContext}
 
-### Rubric:
+### Rubric Breakdown:
 ${rubricCriteria.map((c) => `- [${c.layer ?? "general"}] ${c.name} (weight: ${c.weight})`).join("\n")}
 
 ### Instructions:
-1. Give brief (3-5 sentences) technical advice covering both backend and frontend issues.
-2. Be specific about root causes — don't just say "check logs".
-3. Maintain an encouraging, senior developer tone.
-4. Do not include PII or sensitive system data.
-
-Your response:
-`;
+1. Write 3-4 concise, helpful sentences summarizing the key technical issues.
+2. Address both Backend and Frontend issues directly (e.g. mention if API routes failed, or if frontend connection refused/timed out).
+3. Provide one concrete, actionable suggestion to fix the root cause.
+4. Do NOT mention exact point numbers or score values.
+5. Tone: encouraging, professional, and clear.
+`.trim();
 
   try {
-    const completion = await getClient().chat.completions.create({
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
-      model: "llama-3.1-8b-instant",
-      max_tokens: 400,
-      temperature: 0.7,
+      max_tokens: 350,
+      temperature: 0.4,
     });
 
-    return completion.choices[0].message.content.trim();
+    const feedback = response.choices[0]?.message?.content?.trim();
+    return feedback || buildFallbackFeedback(failureContext, rubricCriteria);
   } catch (err) {
-    console.error("[FullstackFeedback] Groq error:", err.message);
-    return "AI feedback is temporarily unavailable. Please review the test details above for hints.";
+    logger.error("[FullstackFeedback] OpenAI API error:", err.message);
+    return buildFallbackFeedback(failureContext, rubricCriteria);
   }
+}
+
+/**
+ * Rule-based fallback feedback if OpenAI is offline.
+ */
+function buildFallbackFeedback(failureContext, rubricCriteria) {
+  if (!failureContext) {
+    return "Great work! All fullstack requirements and test cases passed successfully.";
+  }
+  return "Your fullstack project encountered errors during automated testing. Please review the specific test failures above to verify your backend API routes, frontend server startup, and cross-origin connectivity.";
 }
