@@ -161,6 +161,24 @@ export async function evaluate(req, res) {
       validateReactPayload(payload);
     }
 
+    // BUG (confirmed live): 'javascript' and 'fullstack' have no validation
+    // function here at all, unlike the four types above. A payload like
+    // `{"type":"javascript"}` (missing `submissions`, `entryFunction`,
+    // everything) sails through this whole function and gets a 200 with a
+    // jobId — it only fails later, inside the worker, with a raw
+    // `TypeError: Cannot read properties of undefined (reading 'repoUrl')`
+    // (workers/jsWorker.js) or a GitHub-credentials error (fullstackWorker.js),
+    // visible only if the caller thinks to poll GET /jobs/:type/:jobId.
+    // Reproduced: POST /evaluate with `{"type":"fullstack"}` alone returned
+    // `{"success":true,"jobId":"1",...}`, then failed in the background.
+    //
+    // FIX: add `validateJavascriptPayload`/`validateFullstackPayload`
+    // functions here, following the exact same pattern as
+    // `validatePythonPayload` above (non-empty `submissions` array, each
+    // entry has a `repoUrl` that passes `assertUrlSyntax`) — check
+    // router/evaluationRouter.js and workers/jsWorker.js /
+    // workers/fullstackWorker.js for the exact fields each one actually
+    // requires before writing the check.
     const jobs = await routeEvaluation(payload);
 
     logger.info('Evaluation job created', { type: payload.type });
@@ -182,6 +200,25 @@ export async function evaluate(req, res) {
     });
 
   } catch (err) {
+    // BUG (confirmed live): a typo'd/unknown `type` (e.g. "backned" instead
+    // of "backend") throws a plain `Error` from
+    // router/evaluationRouter.js's `routeEvaluation()` — "Invalid evaluator
+    // type: backned" — which is NOT a `ValidationError` and doesn't match
+    // any pattern in the regex below. So `isBadInput` is `false` here and
+    // this returns 500, even though the message is a perfectly clear,
+    // 100%-the-caller's-fault input error. Reproduced: POST /evaluate with
+    // `{"type":"backned",...}` returned `HTTP 500` with that exact message.
+    // A 500 here reads as "the server is broken" to monitoring/retry logic
+    // that treats 4xx and 5xx differently — a typo shouldn't look like an
+    // outage.
+    //
+    // FIX: either (a) make routeEvaluation() throw a `ValidationError`
+    // (import it from this file, or define an equivalent one in
+    // evaluationRouter.js) instead of a plain `Error` for the invalid-type
+    // case, or (b) add the "Invalid evaluator type" text to the regex
+    // below. (a) is the better fix — it's more resilient to the message
+    // text changing later than adding yet another string to this regex.
+    //
     // Bad input → 400; everything else → 500.
     const isBadInput =
       err instanceof ValidationError ||

@@ -109,6 +109,27 @@ async function startServer() {
       }
     });
 
+    // BUG (confirmed live): this route has no requireApiKey — it's the only
+    // one of the app's endpoints without it (compare line 80's
+    // `/evaluate`, which has both evaluateRateLimiter and requireApiKey).
+    // queueManager.getJobStatus() returns the full job, including `data`
+    // (repoUrl, rubric, submission info) and, on failure, `stacktrace`
+    // (internal file paths). Job IDs are small sequential integers per
+    // queue (1, 2, 3, ...), not random/opaque — no guessing needed, just
+    // count up. Verified: GET /jobs/<type>/1 with no x-api-key header
+    // returned 200 with a real prior submission's data, including a real
+    // repoUrl, that this session never created. Anyone who can reach the
+    // gateway can enumerate every job — every student's submission and
+    // result — that's ever been run.
+    //
+    // FIX: add `requireApiKey` here the same way `/evaluate` has it
+    // (`app.get('/jobs/:type/:jobId', requireApiKey, async (req, res) => {`).
+    // That's necessary but not sufficient on its own, though — a single
+    // shared API key still lets any caller read *every* job, not just
+    // their own. If different callers (e.g. multiple LMS instances,
+    // students) are meant to only see their own jobs, the job also needs
+    // an owner/caller identifier stored at creation time (config/queueManager.js's
+    // addEvaluation) and checked here before returning the result.
     app.get('/jobs/:type/:jobId', async (req, res) => {
   try {
     const result = await queueManager.getJobStatus(

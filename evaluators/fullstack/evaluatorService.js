@@ -212,6 +212,12 @@ export async function evaluateFullstackProject(payload, jobId, testResults, logs
 
     const openai = getClient();
     if (!openai) {
+      // BUG: identical pattern to evaluators/backend/evaluatorService.js's
+      // `!openai` branch — see the detailed comment there. Same problem
+      // here: a missing OPENAI_API_KEY makes every submission that reaches
+      // this fallback score a flat 50% on every criterion, with no
+      // top-level signal that this isn't a real evaluation. Apply the same
+      // fix in both places so they don't drift apart again.
       const breakdown = {};
       const unifiedBreakdown = [];
       for (const c of rubric.criteria) {
