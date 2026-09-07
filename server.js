@@ -109,20 +109,39 @@ async function startServer() {
       }
     });
 
-    app.get('/jobs/:type/:jobId', async (req, res) => {
-  try {
-    const result = await queueManager.getJobStatus(
-      req.params.type,
-      req.params.jobId
-    );
+    app.get('/jobs/:type/:jobId', requireApiKey, async (req, res) => {
+      try {
+        const result = await queueManager.getJobStatus(
+          req.params.type,
+          req.params.jobId
+        );
 
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({
-      error: err.message
+        if (!result) {
+          return res.status(404).json({
+            success: false,
+            error: 'Job not found'
+          });
+        }
+
+        // Sanitize sensitive internal details if needed
+        const sanitized = {
+          id: result.id,
+          state: result.state,
+          progress: result.progress,
+          result: result.result,
+          failedReason: result.failedReason,
+          data: result.data
+        };
+
+        res.json(sanitized);
+      } catch (err) {
+        logger.error(`Error retrieving job status: ${err.message}`);
+        res.status(500).json({
+          success: false,
+          error: err.message
+        });
+      }
     });
-  }
-});
 
     // 6. Start server
     const PORT = process.env.PORT || 3000;

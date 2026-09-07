@@ -212,32 +212,8 @@ export async function evaluateFullstackProject(payload, jobId, testResults, logs
 
     const openai = getClient();
     if (!openai) {
-      const breakdown = {};
-      const unifiedBreakdown = [];
-      for (const c of rubric.criteria) {
-        breakdown[c.name] = Math.round(c.weight * 0.5);
-        unifiedBreakdown.push({
-          item: c.name,
-          awarded: Math.round(c.weight * 0.5),
-          max: c.weight,
-          reason: "OpenAI client unavailable. Defaulting to 50% partial credit."
-        });
-      }
-      const rubricFeedback = {
-        summary: "AI grading client unavailable. Default partial credit assigned.",
-        strengths: [],
-        issues: ["OpenAI API key is missing on the server."],
-        breakdown: unifiedBreakdown
-      };
-      return {
-        score: Math.round(maxScore * 0.5),
-        rubric_breakdown: breakdown,
-        feedback: rubricFeedback,
-        rubricFeedback: rubricFeedback,
-        warnings: ["OpenAI API key missing on server."],
-        execution_logs: logs || "",
-        status: "fail"
-      };
+      logger.error(`OpenAI client unavailable for Fullstack Job ${jobId} and deterministic test results were absent.`);
+      throw new Error("AI evaluation service unavailable: OPENAI_API_KEY is missing or invalid on the server.");
     }
 
     const rubricText = JSON.stringify(rubric, null, 2);

@@ -1,12 +1,13 @@
 import queueManager from '../config/queueManager.js';
 import logger from '../config/logger.js';
+import { ValidationError } from '../controller/evaluatorController.js';
 
 export async function routeEvaluation(payload) {
   const { type } = payload;
 
   // Validate type
   if (!queueManager.getQueueTypes().includes(type)) {
-    throw new Error(`Invalid evaluator type: ${type}`);
+    throw new ValidationError(`Invalid evaluator type: ${type}`);
   }
 
   try {
