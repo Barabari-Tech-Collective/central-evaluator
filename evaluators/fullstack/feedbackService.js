@@ -13,7 +13,10 @@ function getOpenAIClient() {
     logger.warn("[FullstackFeedback] OPENAI_API_KEY is not set.");
     return null;
   }
-  client = new OpenAI({ apiKey });
+  client = new OpenAI({
+    apiKey,
+    baseURL: process.env.OPENAI_BASE_URL || 'https://api.deepseek.com',
+  });
   return client;
 }
 
@@ -90,7 +93,7 @@ ${rubricCriteria.map((c) => `- [${c.layer ?? "general"}] ${c.name} (weight: ${c.
 
   try {
     const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: process.env.OPENAI_MODEL || "deepseek-v4-flash",
       messages: [{ role: "user", content: prompt }],
       max_tokens: 350,
       temperature: 0.4,

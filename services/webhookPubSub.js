@@ -25,7 +25,10 @@ class WebhookPubSub extends EventEmitter {
 
     this.subscriber.on('pmessage', (pattern, channel, message) => {
       try {
+        logger.info(`WebhookPubSub received pmessage on channel ${channel}`);
         const payload = JSON.parse(message);
+        const hasListeners = this.listenerCount(channel) > 0;
+        logger.info(`WebhookPubSub emitting to ${channel}. Listeners attached: ${hasListeners}`);
         this.emit(channel, payload);
       } catch (err) {
         logger.error(`Failed to parse webhook message for ${channel}:`, err);
@@ -43,7 +46,10 @@ class WebhookPubSub extends EventEmitter {
       const channel = `github_webhook_${jobId}`;
       let timeoutId;
       
+      logger.info(`WebhookPubSub waitForWebhook setting up listener for ${channel}`);
+      
       const handler = (payload) => {
+        logger.info(`WebhookPubSub waitForWebhook handler triggered for ${channel}`);
         clearTimeout(timeoutId);
         this.off(channel, handler);
         resolve(payload);
@@ -52,6 +58,7 @@ class WebhookPubSub extends EventEmitter {
       this.on(channel, handler);
 
       timeoutId = setTimeout(() => {
+        logger.error(`WebhookPubSub waitForWebhook TIMEOUT for ${channel}`);
         this.off(channel, handler);
         reject(new Error("GitHub Actions webhook timeout"));
       }, timeoutMs);

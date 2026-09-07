@@ -15,7 +15,10 @@ function getClient() {
     logger.warn('OPENAI_API_KEY not set - Fullstack AI feedback fallback will fail.');
     return null;
   }
-  client = new OpenAI({ apiKey });
+  client = new OpenAI({
+    apiKey,
+    baseURL: process.env.OPENAI_BASE_URL || 'https://api.deepseek.com',
+  });
   return client;
 }
 
@@ -244,7 +247,7 @@ Output STRICTLY a JSON object with this exact format (no markdown, no extra text
 `.trim();
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: process.env.OPENAI_MODEL || "deepseek-v4-flash",
       messages: [{ role: "user", content: prompt }],
       max_tokens: 500,
       temperature: 0.2,

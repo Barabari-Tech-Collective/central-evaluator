@@ -13,10 +13,16 @@ dotenv.config();
 let _client;
 function getClient() {
   if (!_client) {
-    _client = new OpenAI({
-      apiKey: process.env.GROQ_API_KEY,
-      baseURL: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
-    });
+    const apiKey = process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY;
+    const baseURL = process.env.GROQ_API_KEY
+      ? (process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1')
+      : (process.env.OPENAI_BASE_URL || 'https://api.deepseek.com');
+    if (apiKey) {
+      _client = new OpenAI({
+        apiKey,
+        baseURL,
+      });
+    }
   }
   return _client;
 }
@@ -28,7 +34,7 @@ function getClient() {
  * @returns {Promise<string>} AI-generated feedback string
  */
 export default async function getAiFeedback(testDetails, rubric) {
-  if (!process.env.GROQ_API_KEY) {
+  if (!process.env.GROQ_API_KEY && !process.env.OPENAI_API_KEY) {
     return "AI-generated feedback is currently unavailable.";
   }
 

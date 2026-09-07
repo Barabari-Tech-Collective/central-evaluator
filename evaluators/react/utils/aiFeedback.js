@@ -18,9 +18,10 @@ function getClient() {
     return null;
   }
 
-  // Use the official OpenAI endpoint
+  // Use the official OpenAI endpoint or DeepSeek
   client = new OpenAI({
     apiKey,
+    baseURL: process.env.OPENAI_BASE_URL || 'https://api.deepseek.com',
   });
 
   logger.info("Groq client initialised.");
@@ -88,7 +89,7 @@ Write 3-4 sentences of honest, direct overall feedback:
     logger.debug('Sending prompt to Groq...');
 
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: process.env.OPENAI_MODEL || 'deepseek-v4-flash',
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 350,
       temperature: 0.4,
@@ -196,7 +197,7 @@ Do NOT include any markdown or text besides the raw JSON object.
 `.trim();
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: process.env.OPENAI_MODEL || "deepseek-v4-flash",
       messages: [{ role: "user", content: prompt }],
       max_tokens: 150,
       temperature: 0.1,

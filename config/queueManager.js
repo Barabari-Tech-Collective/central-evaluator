@@ -204,6 +204,16 @@ class QueueManager {
         jobId = `${type}-${hash}`;
       }
 
+      // Ensure re-evaluations trigger a fresh GitHub Action / worker execution
+      try {
+        const existingJob = await queue.getJob(String(jobId));
+        if (existingJob) {
+          await existingJob.remove();
+        }
+      } catch {
+        // ignore
+      }
+
       // Add job to queue with deterministic jobId for deduplication
       const job = await queue.add(
         config.jobName,
@@ -211,6 +221,8 @@ class QueueManager {
         {
           jobId: String(jobId),
           priority: payload.priority || 10,   // Default priority
+          removeOnComplete: { count: 100 },
+          removeOnFail: { count: 100 }
         }
       );
 
