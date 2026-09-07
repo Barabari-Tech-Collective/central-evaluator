@@ -15,6 +15,7 @@ function getGroqClient() {
   }
   client = new OpenAI({
     apiKey,
+    baseURL: process.env.OPENAI_BASE_URL || 'https://api.deepseek.com',
   });
   return client;
 }
@@ -254,15 +255,8 @@ export default async function scoreSubmission(rubric, projectPath, githubReport,
     const groq = getGroqClient();
 
     if (!groq) {
-      // If no AI client, give half credit for having code (better than 0)
-      logger.warn("Groq client unavailable — defaulting to partial credit.");
-      for (const c of rubric.criteria) {
-        breakdown[c.name] = Math.round(c.weight * 0.5);
-        reasons[c.name] = "AI grading client unavailable. Default partial credit assigned.";
-        multipliers[c.name] = 0.5;
-        totalScore += breakdown[c.name];
-      }
-      warnings.push("AI scoring unavailable — default partial credit assigned.");
+      logger.error("Groq client unavailable — OPENAI_API_KEY is not set.");
+      throw new Error("AI grading client unavailable. Please check your API keys.");
     } else {
       const prompt = `You are an expert React instructor grading a student's assignment.
 
@@ -326,7 +320,7 @@ Output STRICTLY a JSON object (no markdown, no extra text):
       logger.info("Sending code to Groq AI for rubric-based scoring...");
 
       const response = await groq.chat.completions.create({
-        model: "gpt-4o-mini",
+        model: process.env.OPENAI_MODEL || "deepseek-v4-flash",
         messages: [{ role: "user", content: prompt }],
         max_tokens: 1000,
         temperature: 0.1,
@@ -377,14 +371,7 @@ Output STRICTLY a JSON object (no markdown, no extra text):
       }
     } catch (err) {
       logger.error(`AI scoring failed: ${err.message}`);
-      warnings.push(`AI scoring error: ${err.message}`);
-      // Fallback: give half credit for having code
-      for (const c of rubric.criteria) {
-        breakdown[c.name] = Math.round(c.weight * 0.5);
-        reasons[c.name] = "AI scoring error. Default partial credit assigned.";
-        multipliers[c.name] = 0.5;
-        totalScore += breakdown[c.name];
-      }
+      throw new Error(`AI scoring error: ${err.message}`);
     }
   }
 }

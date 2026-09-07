@@ -11,7 +11,12 @@ import {
 const MAX_SUBMISSIONS = Number(process.env.MAX_SUBMISSIONS) || 500;
 const MAX_RUBRIC_CHARS = Number(process.env.MAX_RUBRIC_CHARS) || 20000;
 
-class ValidationError extends Error {}
+export class ValidationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ValidationError';
+  }
+}
 
 // Validate + sanitize the visual payload (V-28) and its URLs (V-03).
 async function validateVisualPayload(payload) {
@@ -134,6 +139,36 @@ function validateReactPayload(payload) {
   validateRubricCriteria(rubric);
 }
 
+function validateJavascriptPayload(payload) {
+  const { submissions, repoUrl } = payload;
+  if (Array.isArray(submissions)) {
+    if (submissions.length === 0) {
+      throw new ValidationError('submissions must be a non-empty array');
+    }
+    const allowedHosts = getAllowedGitHosts();
+    for (const s of submissions) {
+      if (!s || typeof s.repoUrl !== 'string' || !s.repoUrl.trim()) {
+        throw new ValidationError('each submission needs a valid repoUrl');
+      }
+      assertUrlSyntax(s.repoUrl, { allowedHosts });
+    }
+  } else if (typeof repoUrl === 'string' && repoUrl.trim()) {
+    assertUrlSyntax(repoUrl, { allowedHosts: getAllowedGitHosts() });
+  } else {
+    throw new ValidationError('submissions (non-empty array) or repoUrl is required for javascript evaluation');
+  }
+}
+
+function validateFullstackPayload(payload) {
+  const { repoUrl, submission_link, rubric } = payload;
+  const targetUrl = repoUrl || submission_link;
+  if (typeof targetUrl !== 'string' || !targetUrl.trim()) {
+    throw new ValidationError('repoUrl or submission_link is required for fullstack evaluation');
+  }
+  assertUrlSyntax(targetUrl, { allowedHosts: getAllowedGitHosts() });
+  validateRubricCriteria(rubric);
+}
+
 export async function evaluate(req, res) {
   try {
     const payload = req.body || {};
@@ -147,18 +182,16 @@ export async function evaluate(req, res) {
 
     if (payload.type === 'visual') {
       await validateVisualPayload(payload);
-    }
-
-    if (payload.type === 'backend') {
+    } else if (payload.type === 'backend') {
       validateBackendPayload(payload);
-    }
-    
-    if (payload.type === 'python') {
+    } else if (payload.type === 'python') {
       validatePythonPayload(payload);
-    }
-    
-    if (payload.type === 'react') {
+    } else if (payload.type === 'react') {
       validateReactPayload(payload);
+    } else if (payload.type === 'javascript') {
+      validateJavascriptPayload(payload);
+    } else if (payload.type === 'fullstack') {
+      validateFullstackPayload(payload);
     }
 
     const jobs = await routeEvaluation(payload);
@@ -185,7 +218,8 @@ export async function evaluate(req, res) {
     // Bad input → 400; everything else → 500.
     const isBadInput =
       err instanceof ValidationError ||
-      /Invalid URL|Disallowed URL scheme|Host not in allowlist|private\/loopback|DNS resolution failed/.test(
+      err.name === 'ValidationError' ||
+      /Invalid evaluator type|Invalid URL|Disallowed URL scheme|Host not in allowlist|private\/loopback|DNS resolution failed/.test(
         err.message
       );
 

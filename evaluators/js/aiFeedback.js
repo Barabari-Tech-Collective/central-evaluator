@@ -14,6 +14,7 @@ function getClient() {
 
   client = new OpenAI({
     apiKey,
+    baseURL: process.env.OPENAI_BASE_URL || 'https://api.deepseek.com',
   });
 
   logger.info("OpenAI client initialised for JS Evaluator.");
@@ -108,7 +109,7 @@ Do NOT use markdown. Just plain text.
     logger.info("Sending JS code to OpenAI for feedback generation...");
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: process.env.OPENAI_MODEL || "deepseek-v4-flash",
       messages: [{ role: "user", content: prompt }],
       max_tokens: 150,
       temperature: 0.4,

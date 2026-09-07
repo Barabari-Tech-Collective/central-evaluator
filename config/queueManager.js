@@ -8,6 +8,7 @@
  * - Redis connection
  */
 
+import crypto from 'crypto';
 import { Queue } from 'bullmq';
 import redisConnection from '../config/redis.js';
 import logger from './logger.js';
@@ -176,13 +177,52 @@ class QueueManager {
       const config = QUEUE_CONFIG[type];
       const queue = this.queues[type];
 
-      // Add job to queue
+      // Derive stable jobId for deduplication if not explicitly passed
+      let jobId = payload.jobId;
+      if (!jobId) {
+        const submissionData =
+          payload.submission ||
+          payload.submissions ||
+          payload.repoUrl ||
+          payload.submission_link ||
+          payload.ideFiles ||
+          '';
+        const rubricData = payload.rubric || payload.rubricText || '';
+        const idPayload = JSON.stringify({
+          type,
+          submission: submissionData,
+          rubric: rubricData,
+          testCases: payload.testCases || '',
+          expectedUrl: payload.expectedUrl || '',
+          assignmentId: payload.assignmentId || '',
+        });
+        const hash = crypto
+          .createHash('sha256')
+          .update(idPayload)
+          .digest('hex')
+          .slice(0, 16);
+        jobId = `${type}-${hash}`;
+      }
+
+      // Ensure re-evaluations trigger a fresh GitHub Action / worker execution
+      try {
+        const existingJob = await queue.getJob(String(jobId));
+        if (existingJob) {
+          await existingJob.remove();
+        }
+      } catch {
+        // ignore
+      }
+
+      // Add job to queue with deterministic jobId for deduplication
       const job = await queue.add(
         config.jobName,
         payload,
         {
-          jobId: payload.jobId || undefined,  // Use provided ID if exists
+          jobId: String(jobId),
           priority: payload.priority || 10,   // Default priority
+          removeOnComplete: { count: 100 },
+          removeOnFail: { count: 100 }
         }
       );
 

@@ -1,12 +1,22 @@
+import crypto from 'crypto';
 import logger from '../config/logger.js';
 import redisConnection from '../config/redis.js';
 
 export const handleGithubWebhook = async (req, res) => {
   try {
-    const secret = req.headers['x-webhook-secret'];
-    if (secret !== process.env.WEBHOOK_SECRET) {
+    const expected = process.env.WEBHOOK_SECRET;
+    if (!expected) {
+      logger.error('WEBHOOK_SECRET is not configured on the server — rejecting request (fail closed)');
+      return res.status(503).json({ error: 'Webhook server auth not configured' });
+    }
+
+    const provided = req.headers['x-webhook-secret'] || '';
+    const a = Buffer.from(provided);
+    const b = Buffer.from(expected);
+
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
       logger.warn(`Unauthorized webhook attempt for job ${req.body?.jobId}`);
-      return res.status(401).json({ error: "Unauthorized" });
+      return res.status(401).json({ error: 'Unauthorized' });
     }
 
     const { jobId, status } = req.body;
