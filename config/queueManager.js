@@ -176,7 +176,26 @@ class QueueManager {
       const config = QUEUE_CONFIG[type];
       const queue = this.queues[type];
 
-      // Add job to queue
+      // BUG (confirmed live): `payload.jobId` is never actually set by any
+      // caller — controller/evaluatorController.js never generates or
+      // forwards one, so this is always `undefined` in practice, and
+      // BullMQ auto-assigns a fresh sequential ID every single call. There
+      // is no de-duplication of any kind. Reproduced: POSTing the exact
+      // same payload (same repoUrl/ideFiles + rubric) to /evaluate twice in
+      // a row created two fully independent jobs (jobId 3 and 4), each of
+      // which separately dispatches to GitHub Actions and separately calls
+      // the paid AI feedback API. The obvious real-world trigger: a slow
+      // request (GitHub Actions + AI feedback can take minutes) causes a
+      // user to reload the page or click submit again.
+      //
+      // FIX: derive a stable jobId from the submission itself instead of
+      // leaving it to chance — e.g. a hash of
+      // `type + repoUrl/ideFiles + rubric` (or, better, have the caller/LMS
+      // pass an idempotency key such as `assignmentId + studentId` and use
+      // that as `jobId`). BullMQ's `queue.add(name, data, { jobId })`
+      // already treats a duplicate `jobId` as "return the existing job"
+      // rather than creating a new one — the plumbing here already
+      // supports this, it's just never given a real ID to dedupe on.
       const job = await queue.add(
         config.jobName,
         payload,

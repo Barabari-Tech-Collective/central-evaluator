@@ -213,6 +213,33 @@ export async function evaluateBackendProject(payload, jobId, testResults, logs, 
 
     const openai = getClient();
     if (!openai) {
+      // BUG (confirmed live): this path only runs when deterministic test
+      // results are absent (checked further up this function) — which is
+      // always true for `ideFiles`/paste-code submissions, since those skip
+      // GitHub Actions entirely (see workers/backendWorker.js). So if
+      // OPENAI_API_KEY is ever missing/expired/misconfigured, EVERY
+      // ideFiles submission across the whole system — correct or
+      // completely broken — silently gets exactly the same score: 50% on
+      // every single criterion, every time. Reproduced: a one-line
+      // `console.log(1)` file against a 100-point rubric scored 50/100.
+      // The real reason ("OpenAI API key is missing") is in
+      // `feedback.issues`, but nothing in the top-level `score` or
+      // `status` fields flags this as a non-evaluation — any caller (e.g.
+      // an LMS gradebook sync) that only reads `score`/`status` sees a
+      // normal-looking 50/100 "fail" for every student, with zero ability
+      // to tell a correct submission from a broken one. This directly
+      // undermines rubrics being "checked end to end" — a broken AI key
+      // degrades to indistinguishable flat scores instead of a visible
+      // failure.
+      //
+      // FIX: don't award a fake score at all here. Either (a) fail the job
+      // outright with a clear error (`status: "error"`, no numeric score,
+      // or a score of `null`) so it's obviously not a real grade and
+      // whoever's monitoring the queue notices immediately, or (b) if a
+      // "safe default" is genuinely wanted, keep it, but ALSO set a
+      // distinct top-level flag (e.g. `manualReviewRequired: true`, same
+      // idea as VISUAL_EVALUATOR_AUDIT.md's `manualCorrection`) that a
+      // caller can check without having to parse `feedback.issues` text.
       // Return partial credit fallback
       const breakdown = {};
       const unifiedBreakdown = [];
