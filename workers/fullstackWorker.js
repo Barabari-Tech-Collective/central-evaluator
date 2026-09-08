@@ -54,7 +54,7 @@ export async function initializeFullstackWorker() {
           const results = await evaluateFullstackProject(job.data, job.id, githubResult.testResults, githubReport);
           
           logger.info(`Fullstack Job ${job.id} completed entirely.`);
-          return { success: true, results };
+          return { success: true, results, result: results };
         } catch (err) {
           logger.error(`Fullstack Job ${job.id} failed`, err);
           throw err;

@@ -62,7 +62,7 @@ export async function initializeBackendWorker() {
           );
           
           logger.info(`Backend Job ${job.id} completed entirely.`);
-          return { success: true, results };
+          return { success: true, results, result: results };
         } catch (err) {
           logger.error(`Backend Job ${job.id} failed`, err);
           throw err;
