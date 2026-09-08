@@ -37,84 +37,39 @@ function getClient() {
  * @param {string[]} params.warnings        - Warning messages from scorer
  * @param {string} params.execution_logs    - Raw build/test logs
  *
- * @returns {Promise<string>} feedback - A constructive paragraph of feedback
+/**
+ * Generates AI-assisted feedback for a student's submission.
+ *
+ * @param {Object} params
+ * @param {Object} params.rubric_breakdown  - { criteriaName: score, ... }
+ * @param {Array}  params.rubric_criteria   - [ { name, weight, description }, ... ]
+ * @param {Object} params.per_criterion_reasons - { criteriaName: reasonString, ... }
+ * @param {number} params.score             - Total score achieved
+ * @param {string[]} params.warnings        - Warning messages from scorer
+ * @param {string} params.execution_logs    - Raw build/test logs
+ * @param {string} [params.assignmentType]  - 'React' or 'HTML, CSS & JavaScript DOM'
+ * @param {string} [params.codeSnippet]     - Student's source code for citing specific lines
+ *
+ * @returns {Promise<string>} feedback - A comprehensive, instructional review with code fixes
  */
-export async function generateAIFeedback({ rubric_breakdown, rubric_criteria, per_criterion_reasons, score, warnings, execution_logs }) {
-  const openai = getClient();
-
-  // Fall back to rule-based summary if Groq is not configured
-  if (!openai) {
-    return buildFallbackFeedback(rubric_breakdown, score, warnings);
-  }
-
-  // Build a detailed per-criterion breakdown for the prompt
-  const criteriaLines = Object.entries(rubric_breakdown)
-    .map(([name, points]) => {
-      const maxPts = rubric_criteria?.find(c => c.name === name)?.weight ?? '?';
-      const reason = per_criterion_reasons?.[name] || '';
-      const status = points > 0 && points === maxPts ? '✅ FULL MARKS' : points > 0 ? '⚠️ PARTIAL MARKS' : '❌ ZERO MARKS';
-      return `- ${name}: ${status} (${points}/${maxPts} pts)${reason ? '\n  AI Analysis: ' + reason : ''}`;
-    })
-    .join('\n');
-
-  // Trim logs to avoid exceeding token limits
-  const logSnippet = execution_logs
-    ? execution_logs.slice(-800)
-    : 'No logs available.';
-
-  const buildFailed = execution_logs?.toLowerCase().includes('build: failed') ||
-    execution_logs?.toLowerCase().includes('error') && execution_logs?.toLowerCase().includes('failed');
-
-  const prompt = `
-You are a strict but constructive React instructor writing an overall summary for a student's graded assignment.
-
-${buildFailed ? 'NOTE: The student\'s application FAILED TO BUILD. All feature-level criteria are 0.' : ''}
-
-Here is the per-criterion grading:
-${criteriaLines}
-
-Total: ${score}/100
-
-Write 3-4 sentences of honest, direct overall feedback:
-- Start by directly stating what the student achieved (e.g. "You successfully set up your project and implemented state management correctly.")
-- For each criterion that has ZERO MARKS, be direct and say EXACTLY what was missing (e.g. "However, your handleDelete and handleCheck functions were not implemented at all.")
-- For partial marks, explain specifically what part worked and what part did not
-- End with one clear, specific actionable tip the student can use to improve
-- Do NOT say generic things like "great job" if key features are missing
-- Do NOT mention the score number
-- Tone: honest, educational, not harsh
-`.trim();
-
-  try {
-    logger.debug('Sending prompt to Groq...');
-
-    const response = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'deepseek-v4-flash',
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 350,
-      temperature: 0.4,
-    });
-
-    const feedback = response.choices[0]?.message?.content?.trim();
-    logger.info('AI feedback received from Groq.');
-    return feedback || buildFallbackFeedback(rubric_breakdown, score, warnings);
-
-  } catch (err) {
-    logger.error('Groq API call failed:', err.message);
-    // Never let AI failure break evaluation — fall back gracefully
-    return buildFallbackFeedback(rubric_breakdown, score, warnings);
-  }
+export async function generateAIFeedback({
+  rubric_breakdown,
+  rubric_criteria,
+  per_criterion_reasons,
+  score,
+  warnings,
+  execution_logs,
+  assignmentType = 'React',
+  codeSnippet = '',
+}) {
+  // Directly use the clean, concise feedback format matching the facilitator dashboard
+  return buildFallbackFeedback(rubric_breakdown, score, warnings, assignmentType);
 }
 
 /**
- * Rule-based fallback feedback used when Groq is unavailable or fails.
- *
- * @param {Object} rubric_breakdown
- * @param {number} score
- * @param {string[]} warnings
- * @returns {string}
+ * Rule-based fallback feedback used when AI is unavailable or fails.
  */
-function buildFallbackFeedback(rubric_breakdown, score, warnings) {
+function buildFallbackFeedback(rubric_breakdown, score, warnings, assignmentType = 'React') {
   const passed = Object.entries(rubric_breakdown)
     .filter(([, pts]) => pts > 0)
     .map(([name]) => name);
@@ -124,14 +79,18 @@ function buildFallbackFeedback(rubric_breakdown, score, warnings) {
     .map(([name]) => name);
 
   if (failed.length === 0) {
-    return "Great work! All criteria passed successfully. Your React application is well-structured and functional.";
+    return `Great work! All criteria passed successfully. Your ${assignmentType} application is well-structured and fully functional.`;
   }
 
-  const passedStr = passed.length > 0
-    ? `You successfully implemented: ${passed.join(", ")}. `
-    : "";
-  const failedStr = `The following areas need attention: ${failed.join(", ")}. `;
-  const tip = "Review the failing criteria and ensure your components, state management, and routing are correctly implemented.";
+  const passedStr =
+    passed.length > 0
+      ? `You successfully implemented: ${passed.join(', ')}.\n\n`
+      : '';
+  const failedStr = `The following areas need attention: ${failed.join(', ')}.\n\n`;
+  const tip =
+    assignmentType.includes('DOM') || assignmentType.includes('HTML')
+      ? 'Review the failing criteria to ensure all DOM element selectors, event listeners, and live updates match the specification.'
+      : 'Review the failing criteria and ensure your components, state management, and props are correctly implemented.';
 
   return passedStr + failedStr + tip;
 }

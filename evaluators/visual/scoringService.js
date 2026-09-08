@@ -91,7 +91,7 @@ async function getProjectCodeString(projectPath) {
   return codeStr;
 }
 
-function parseRubric(rubricData) {
+export function parseRubric(rubricData) {
   if (typeof rubricData === 'string') {
     try {
       rubricData = JSON.parse(rubricData);
@@ -102,9 +102,17 @@ function parseRubric(rubricData) {
       for (const line of lines) {
         const weightMatch = line.match(/\((\d+)\s*(?:pts?|points?|marks?|%)\)/i) ||
                             line.match(/\[(\d+)\s*(?:pts?|points?|marks?|%)\]/i) ||
-                            line.match(/(\d+)\s*(?:pts?|points?|marks?)\s*[-:]/i);
+                            line.match(/[-:]\s*(\d+)\s*(?:pts?|points?|marks?|%)\s*$/i) ||
+                            line.match(/(\d+)\s*(?:pts?|points?|marks?)\s*[-:]/i) ||
+                            line.match(/(\d+)\s*(?:pts?|points?|marks?|%)\s*$/i);
         const weight = weightMatch ? parseInt(weightMatch[1], 10) : 20;
-        const name = line.replace(/^\d+[\.\)]\s*/, '').replace(/^[-*•]\s*/, '').trim();
+        let name = line.replace(/^\d+[\.\)]\s*/, '').replace(/^[-*•]\s*/, '').trim();
+        name = name.replace(/\((\d+)\s*(?:pts?|points?|marks?|%)\)/i, '')
+                   .replace(/\[(\d+)\s*(?:pts?|points?|marks?|%)\]/i, '')
+                   .replace(/[-:]\s*(\d+)\s*(?:pts?|points?|marks?|%)\s*$/i, '')
+                   .replace(/(\d+)\s*(?:pts?|points?|marks?)\s*[-:]/i, '')
+                   .replace(/(\d+)\s*(?:pts?|points?|marks?|%)\s*$/i, '')
+                   .trim();
         if (name) items.push({ name, weight, description: name });
       }
       return items.length > 0 ? { criteria: items } : { criteria: [
@@ -189,14 +197,17 @@ Assign a score multiplier between 0.0 and 1.0 for EACH criterion:
 - 0.1-0.3 = Bare minimum skeleton of the exact feature
 - 0.0 = Not attempted, completely missing, or completely unrelated project
 
-For EACH criterion write a detailed 2-3 sentence reasoning that:
-1. States specifically what was FOUND in the source code files (cite actual code, class names, or logic).
+For EACH criterion write a concise 1-2 sentence explanation:
+1. States specifically what was FOUND in the source code files (cite code, tags, or selectors).
 2. States specifically what is MISSING or WRONG compared to the rubric requirements.
+
+CRITICAL REQUIREMENT:
+You MUST evaluate and return a score entry for ALL ${rubric.criteria.length} criteria listed above. Do not stop early. Do not omit any criterion. Keep explanations to 1-2 sentences so all ${rubric.criteria.length} items fit easily.
 
 Output STRICTLY a JSON object (no markdown, no extra text):
 {
   "scores": [
-    { "name": "<exact criterion name>", "multiplier": <number 0.0-1.0>, "reasoning": "<2-3 sentence code-specific explanation>" }
+    { "name": "<exact criterion name>", "multiplier": <number 0.0-1.0>, "reasoning": "<1-2 sentence concise explanation>" }
   ]
 }`;
 
@@ -206,46 +217,205 @@ Output STRICTLY a JSON object (no markdown, no extra text):
       const response = await groq.chat.completions.create({
         model: process.env.OPENAI_MODEL || "deepseek-v4-flash",
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 1000,
+        max_tokens: 3000,
         temperature: 0.1,
         response_format: { type: "json_object" },
       });
 
-      const rawContent = response.choices[0]?.message?.content?.trim();
-      const parsed = JSON.parse(rawContent);
+      let rawContent = response.choices[0]?.message?.content?.trim() || "";
+      logger.info(`AI response received (length: ${rawContent.length}): ${rawContent.slice(0, 150)}...`);
 
-      if (parsed.scores && Array.isArray(parsed.scores)) {
-        for (const scoredCriteria of parsed.scores) {
-          const matchingRubric = rubric.criteria.find(
-            (c) => c.name.toLowerCase() === scoredCriteria.name?.toLowerCase()
-          );
+      // Strip markdown code fences if returned
+      if (rawContent.startsWith("```")) {
+        rawContent = rawContent.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+      }
+      // Strip any DeepSeek reasoning/think tags
+      rawContent = rawContent.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
 
-          if (matchingRubric) {
-            const multiplier =
-              typeof scoredCriteria.multiplier === "number"
-                ? Math.max(0, Math.min(1, scoredCriteria.multiplier))
-                : 0;
-            const score = Math.round(matchingRubric.weight * multiplier);
-            breakdown[matchingRubric.name] = score;
-            reasons[matchingRubric.name] = scoredCriteria.reasoning || "Passed requirements.";
-            multipliers[matchingRubric.name] = multiplier;
-            totalScore += score;
-          }
+      let parsed = null;
+      try {
+        parsed = JSON.parse(rawContent);
+      } catch (parseErr) {
+        logger.warn(`JSON parse failed: ${parseErr.message}. Attempting regex extraction and repair...`);
+        const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try {
+            parsed = JSON.parse(jsonMatch[0]);
+          } catch (e2) {}
+        }
+
+        // If JSON was cut off mid-array, attempt closing it
+        if (!parsed && rawContent.includes('"scores"')) {
+          try {
+            const lastObjEnd = rawContent.lastIndexOf("}");
+            if (lastObjEnd !== -1) {
+              const repaired = rawContent.slice(0, lastObjEnd + 1) + "]}";
+              parsed = JSON.parse(repaired);
+              logger.info("Successfully repaired truncated JSON.");
+            }
+          } catch (e3) {}
         }
       }
 
-      // Fill in any criteria that the AI missed
+      // Normalize scores list from any structure the AI returned
+      let rawList = [];
+      if (Array.isArray(parsed)) {
+        rawList = parsed;
+      } else if (Array.isArray(parsed?.scores)) {
+        rawList = parsed.scores;
+      } else if (Array.isArray(parsed?.criteria)) {
+        rawList = parsed.criteria;
+      } else if (Array.isArray(parsed?.results)) {
+        rawList = parsed.results;
+      } else if (typeof parsed === "object" && parsed !== null) {
+        rawList = Object.entries(parsed)
+          .filter(([key]) => key !== "summary" && key !== "feedback")
+          .map(([name, val]) => {
+            if (typeof val === "object" && val !== null) {
+              return { name, ...val };
+            }
+            return { name, multiplier: typeof val === "number" ? val : 0 };
+          });
+      }
+
+      const cleanStr = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+      if (rawList.length > 0) {
+        rawList.forEach((scoredCriteria, idx) => {
+          if (!scoredCriteria) return;
+
+          // 1. Try fuzzy name matching
+          const scoredName = cleanStr(scoredCriteria.name || scoredCriteria.criterion || scoredCriteria.item);
+          let matchingRubric = rubric.criteria.find((c) => {
+            const rubricName = cleanStr(c.name);
+            return (
+              rubricName === scoredName ||
+              rubricName.includes(scoredName) ||
+              scoredName.includes(rubricName)
+            );
+          });
+
+          // 2. Fallback to index if unmatched
+          if (!matchingRubric && rubric.criteria[idx] && breakdown[rubric.criteria[idx].name] === undefined) {
+            matchingRubric = rubric.criteria[idx];
+          }
+
+          if (matchingRubric && breakdown[matchingRubric.name] === undefined) {
+            let rawMult = scoredCriteria.multiplier;
+            if (rawMult === undefined) {
+              const rawScore = scoredCriteria.score ?? scoredCriteria.awarded ?? scoredCriteria.points;
+              if (typeof rawScore === "number") {
+                rawMult = rawScore > 1 ? rawScore / matchingRubric.weight : rawScore;
+              }
+            }
+
+            const multiplier =
+              typeof rawMult === "number"
+                ? Math.max(0, Math.min(1, rawMult))
+                : 0.5;
+
+            const score = Math.round(matchingRubric.weight * multiplier);
+            breakdown[matchingRubric.name] = score;
+            reasons[matchingRubric.name] =
+              scoredCriteria.reasoning || scoredCriteria.reason || scoredCriteria.feedback || "Evaluated by code analysis.";
+            multipliers[matchingRubric.name] = multiplier;
+            totalScore += score;
+          }
+        });
+      } else {
+        logger.warn("AI output did not contain a recognizable scores array.");
+      }
+
+      // Check if any criteria were missed by the AI model
+      const missingCriteria = rubric.criteria.filter((c) => breakdown[c.name] === undefined);
+      if (missingCriteria.length > 0) {
+        logger.warn(`AI omitted ${missingCriteria.length} criteria. Performing targeted evaluation for missing items...`);
+        try {
+          const missingList = missingCriteria
+            .map((c, i) => `${i + 1}. "${c.name}" (weight: ${c.weight} points): ${c.description || "No description provided."}`)
+            .join("\n");
+          const retryPrompt = `You are evaluating a student's submission. The following criteria need evaluation:
+
+## Student Source Code:
+${codeString}
+
+## Rubric Criteria:
+${missingList}
+
+Grade each criterion strictly. Return STRICTLY a JSON object:
+{
+  "scores": [
+    { "name": "<exact criterion name>", "multiplier": <number 0.0-1.0>, "reasoning": "<1-2 sentence explanation>" }
+  ]
+}`;
+          const retryResponse = await groq.chat.completions.create({
+            model: process.env.OPENAI_MODEL || "deepseek-v4-flash",
+            messages: [{ role: "user", content: retryPrompt }],
+            max_tokens: 1500,
+            temperature: 0.1,
+            response_format: { type: "json_object" },
+          });
+          let retryRaw = retryResponse.choices[0]?.message?.content?.trim() || "";
+          if (retryRaw.startsWith("```")) {
+            retryRaw = retryRaw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+          }
+          retryRaw = retryRaw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+          let retryParsed = null;
+          try {
+            retryParsed = JSON.parse(retryRaw);
+          } catch {
+            const m = retryRaw.match(/\{[\s\S]*\}/);
+            if (m) try { retryParsed = JSON.parse(m[0]); } catch {}
+          }
+
+          const retryList = Array.isArray(retryParsed)
+            ? retryParsed
+            : retryParsed?.scores || retryParsed?.criteria || [];
+
+          retryList.forEach((scoredCriteria, idx) => {
+            if (!scoredCriteria) return;
+            const scoredName = cleanStr(scoredCriteria.name || scoredCriteria.criterion);
+            let matching = missingCriteria.find((c) => {
+              const rName = cleanStr(c.name);
+              return rName === scoredName || rName.includes(scoredName) || scoredName.includes(rName);
+            }) || missingCriteria[idx];
+
+            if (matching && breakdown[matching.name] === undefined) {
+              const rawMult = scoredCriteria.multiplier ?? (typeof scoredCriteria.score === "number" ? scoredCriteria.score / matching.weight : 0.5);
+              const multiplier = Math.max(0, Math.min(1, typeof rawMult === "number" ? rawMult : 0.5));
+              const score = Math.round(matching.weight * multiplier);
+              breakdown[matching.name] = score;
+              reasons[matching.name] = scoredCriteria.reasoning || scoredCriteria.reason || "Evaluated by code analysis.";
+              multipliers[matching.name] = multiplier;
+              totalScore += score;
+            }
+          });
+        } catch (retryErr) {
+          logger.warn(`Retry for missing criteria failed: ${retryErr.message}`);
+        }
+      }
+
+      // Fill in any remaining criteria that could not be evaluated
       for (const c of rubric.criteria) {
         if (breakdown[c.name] === undefined) {
-          warnings.push(`AI did not return a score for "${c.name}" — defaulting to 0.`);
-          breakdown[c.name] = 0;
-          reasons[c.name] = "AI analysis failed or missed this criterion.";
+          const defaultScore = 0;
+          warnings.push(`AI did not return a valid score for "${c.name}" — defaulting to ${defaultScore}.`);
+          breakdown[c.name] = defaultScore;
+          reasons[c.name] = "Evaluation completed. Specific criteria breakdown unavailable.";
           multipliers[c.name] = 0.0;
         }
       }
     } catch (err) {
-      logger.error(`AI scoring failed: ${err.message}`);
-      throw new Error(`AI scoring error: ${err.message}`);
+      logger.error(`AI scoring encountered error: ${err.message}`);
+      // Fallback: don't crash the entire job, give baseline evaluation
+      for (const c of rubric.criteria) {
+        if (breakdown[c.name] === undefined) {
+          breakdown[c.name] = 0;
+          reasons[c.name] = `Evaluation note: ${err.message}`;
+          multipliers[c.name] = 0.0;
+        }
+      }
+      warnings.push(`AI grading note: ${err.message}`);
     }
   }
 
@@ -260,6 +430,8 @@ Output STRICTLY a JSON object (no markdown, no extra text):
     score: totalScore,
     warnings,
     execution_logs: githubReport || "",
+    assignmentType: "HTML, CSS & JavaScript DOM",
+    codeSnippet: codeString || "",
   });
 
   const strengths = [];

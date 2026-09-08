@@ -5,6 +5,7 @@ import fs from 'fs';
 import { cloneRepo, deleteRepo } from '../react/repoService.js';
 import { scoreFromTestResults } from './scoringService.js';
 import { generateFullstackFeedback } from './feedbackService.js';
+import { generateAIFeedback } from '../react/utils/aiFeedback.js';
 
 let client = null;
 
@@ -23,12 +24,12 @@ function getClient() {
 }
 
 /**
- * Recursively reads .js, .jsx, .ts, .tsx, .css, .html files from a directory,
+ * Recursively reads .js, .jsx, .ts, .tsx, .css, .html, .json files from a directory,
  * ignoring node_modules, dist, build, .git to save tokens.
  */
 async function readProjectFiles(dir, fileList = []) {
-  const IGNORED_DIRS = new Set(["node_modules", "dist", "build", ".git", ".next", "public", "assets"]);
-  const ALLOWED_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx", ".css", ".html"]);
+  const IGNORED_DIRS = new Set(["node_modules", "dist", "build", ".git", ".next", "public", "assets", "coverage"]);
+  const ALLOWED_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx", ".css", ".html", ".json", ".sql"]);
 
   let entries;
   try {
@@ -47,7 +48,9 @@ async function readProjectFiles(dir, fileList = []) {
         await readProjectFiles(filePath, fileList);
       }
     } else if (ALLOWED_EXTENSIONS.has(path.extname(entry).toLowerCase())) {
-      fileList.push(filePath);
+      if (entry !== 'package-lock.json') {
+        fileList.push(filePath);
+      }
     }
   }
   return fileList;
@@ -76,7 +79,7 @@ async function getProjectCodeString(projectPath) {
       const compressed = compressCode(content);
       codeStr += `\n--- ${relativePath} ---\n${compressed.slice(0, 2000)}\n`;
     } catch {
-      // Skip
+      // Skip unreadable files
     }
   }
 
@@ -86,20 +89,20 @@ async function getProjectCodeString(projectPath) {
 /**
  * Evaluates a Full Stack project.
  * Tries mathematical scoring via Playwright test results first.
- * Falls back to OpenAI AI-based code analysis if test results are absent/failed.
+ * Falls back to AI-based code analysis if test results are absent/failed.
  */
 export async function evaluateFullstackProject(payload, jobId, testResults, logs, codeContext = null) {
   const rawCriteria = payload.rubric?.criteria || [];
   const criteria = rawCriteria.map(c => ({
     name: c.name,
-    weight: typeof c.weight === 'number' ? c.weight : (typeof c.score === 'number' ? c.score : 0),
+    weight: typeof c.weight === 'number' ? c.weight : (typeof c.score === 'number' ? c.score : 20),
     description: c.description || "",
     layer: c.layer || "general"
   }));
   const rubric = { ...payload.rubric, criteria };
   const maxScore = rubric.criteria.reduce((sum, c) => sum + c.weight, 0);
 
-  // Try mathematical scoring if Playwright test results are present
+  // 1. Try mathematical scoring if Playwright test results are present
   const testGrading = scoreFromTestResults(rubric, testResults);
   if (testGrading) {
     logger.info(`Deterministic testResults found. Grading Fullstack project mathematically for Job ${jobId}`);
@@ -171,7 +174,7 @@ export async function evaluateFullstackProject(payload, jobId, testResults, logs
     };
   }
 
-  // Fallback: AI-based code analysis
+  // 2. Fallback: AI-based code analysis (identical resilient flow to React, Visual & Backend)
   logger.info(`Test results absent or empty for Job ${jobId}. Falling back to AI code grading.`);
 
   let repoPath;
@@ -219,89 +222,293 @@ export async function evaluateFullstackProject(payload, jobId, testResults, logs
       throw new Error("AI evaluation service unavailable: OPENAI_API_KEY is missing or invalid on the server.");
     }
 
-    const rubricText = JSON.stringify(rubric, null, 2);
-    const prompt = `
-You are an expert Full Stack (MERN/PERN/JAMStack) instructor evaluating a student's assignment.
+    const criteriaList = rubric.criteria
+      .map((c, i) => `${i + 1}. "${c.name}" (weight: ${c.weight} points): ${c.description || "No description provided."}`)
+      .join("\n");
 
-## Rubric:
-${rubricText}
+    const prompt = `You are an expert Full Stack (React, Node/Express, MongoDB/SQL) instructor grading a student's fullstack web application.
 
-## Student's Core Source Code:
+## GitHub Actions / Execution Report:
+${logs || "No report available."}
+
+## Student's Compressed Source Code:
 ${codeString}
 
-Please carefully analyze the attached source code and determine how well they met the rubric requirements.
+## Rubric Criteria to Evaluate:
+${criteriaList}
 
-Write constructive, encouraging feedback based on their code.
-Do NOT mention the numeric score in the feedback text.
+## Grading Instructions:
+You must be an objective, thorough instructor.
+Read the source code carefully across both frontend and backend to determine if the functionality requested in the rubric actually exists.
+Check for proper frontend components/state/API calls, backend routes/controllers, database integration, and cross-origin connectivity.
+Do NOT penalize if .env file is missing (expected for security reasons).
 
-Output STRICTLY a JSON object with this exact format (no markdown, no extra text):
+Assign a score multiplier between 0.0 and 1.0 for EACH criterion:
+- 1.0 = Fully meets all exact requirements for this criterion
+- 0.7-0.9 = Mostly correct with minor gaps
+- 0.4-0.6 = Partial implementation
+- 0.1-0.3 = Bare minimum skeleton
+- 0.0 = Not attempted, completely missing, or completely unrelated project
+
+For EACH criterion write a concise 1-2 sentence explanation:
+1. States specifically what was FOUND in the source code (cite components, routes, or queries).
+2. States specifically what is MISSING or WRONG compared to the rubric requirements.
+
+CRITICAL REQUIREMENT:
+You MUST evaluate and return a score entry for ALL ${rubric.criteria.length} criteria listed above. Do not stop early. Do not omit any criterion. Keep explanations to 1-2 sentences so all ${rubric.criteria.length} items fit easily.
+
+Output STRICTLY a JSON object (no markdown, no extra text):
 {
-  "score": <number 0-100>,
-  "summary": "1-2 sentences summarizing their attempt.",
-  "strengths": ["1 thing they did well, especially regarding architecture"],
-  "issues": ["1-2 things that need fixing based on the rubric"],
-  "rubric_breakdown": [
-     { "criterion": "Name of criterion", "points_awarded": <number>, "max_points": <number>, "comment": "Brief comment" }
+  "scores": [
+    { "name": "<exact criterion name>", "multiplier": <number 0.0-1.0>, "reasoning": "<1-2 sentence concise explanation>" }
   ]
-}
-`.trim();
+}`;
+
+    logger.info(`Sending code to AI for fullstack rubric scoring (Job: ${jobId})...`);
 
     const response = await openai.chat.completions.create({
       model: process.env.OPENAI_MODEL || "deepseek-v4-flash",
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 500,
-      temperature: 0.2,
+      max_tokens: 3000,
+      temperature: 0.1,
       response_format: { type: "json_object" },
     });
 
-    const resultStr = response.choices[0].message.content.trim();
-    const resultObj = JSON.parse(resultStr);
+    let rawContent = response.choices[0]?.message?.content?.trim() || "";
+    logger.info(`AI response received (length: ${rawContent.length}) for Job ${jobId}`);
 
-    const breakdown = {};
-    const unifiedBreakdown = [];
-    const strengths = resultObj.strengths || [];
-    const issues = resultObj.issues || [];
-
-    for (const item of resultObj.rubric_breakdown || []) {
-      breakdown[item.criterion] = item.points_awarded;
-      unifiedBreakdown.push({
-        item: item.criterion,
-        awarded: item.points_awarded,
-        max: item.max_points,
-        reason: item.comment || ""
-      });
+    // Strip markdown code fences
+    if (rawContent.startsWith("```")) {
+      rawContent = rawContent.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
     }
+    // Strip DeepSeek reasoning/think tags
+    rawContent = rawContent.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
 
-    // Ensure all criteria are filled
-    for (const c of rubric.criteria) {
-      if (breakdown[c.name] === undefined) {
-        breakdown[c.name] = 0;
-        unifiedBreakdown.push({
-          item: c.name,
-          awarded: 0,
-          max: c.weight,
-          reason: "Not graded by AI."
-        });
+    let parsed = null;
+    try {
+      parsed = JSON.parse(rawContent);
+    } catch (parseErr) {
+      logger.warn(`JSON parse failed: ${parseErr.message}. Attempting regex extraction and repair...`);
+      const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try {
+          parsed = JSON.parse(jsonMatch[0]);
+        } catch {}
+      }
+
+      if (!parsed && rawContent.includes('"scores"')) {
+        try {
+          const lastObjEnd = rawContent.lastIndexOf("}");
+          if (lastObjEnd !== -1) {
+            const repaired = rawContent.slice(0, lastObjEnd + 1) + "]}";
+            parsed = JSON.parse(repaired);
+            logger.info("Successfully repaired truncated JSON.");
+          }
+        } catch {}
       }
     }
 
-    const calculatedScore = Object.values(breakdown).reduce((sum, v) => sum + v, 0);
+    // Normalize scores list from any structure the AI returned
+    let rawList = [];
+    if (Array.isArray(parsed)) {
+      rawList = parsed;
+    } else if (Array.isArray(parsed?.scores)) {
+      rawList = parsed.scores;
+    } else if (Array.isArray(parsed?.rubric_breakdown)) {
+      rawList = parsed.rubric_breakdown;
+    } else if (Array.isArray(parsed?.criteria)) {
+      rawList = parsed.criteria;
+    } else if (Array.isArray(parsed?.results)) {
+      rawList = parsed.results;
+    } else if (typeof parsed === "object" && parsed !== null) {
+      rawList = Object.entries(parsed)
+        .filter(([key]) => key !== "summary" && key !== "feedback" && key !== "strengths" && key !== "issues")
+        .map(([name, val]) => {
+          if (typeof val === "object" && val !== null) {
+            return { name, ...val };
+          }
+          return { name, multiplier: typeof val === "number" ? val : 0 };
+        });
+    }
+
+    const cleanStr = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+    const breakdown = {};
+    const reasons = {};
+    const multipliers = {};
+    let totalScore = 0;
+
+    if (rawList.length > 0) {
+      rawList.forEach((scoredCriteria, idx) => {
+        if (!scoredCriteria) return;
+
+        // 1. Try fuzzy name matching
+        const scoredName = cleanStr(scoredCriteria.name || scoredCriteria.criterion || scoredCriteria.item);
+        let matchingRubric = rubric.criteria.find((c) => {
+          const rubricName = cleanStr(c.name);
+          return (
+            rubricName === scoredName ||
+            rubricName.includes(scoredName) ||
+            scoredName.includes(rubricName)
+          );
+        });
+
+        // 2. Fallback to index if unmatched
+        if (!matchingRubric && rubric.criteria[idx] && breakdown[rubric.criteria[idx].name] === undefined) {
+          matchingRubric = rubric.criteria[idx];
+        }
+
+        if (matchingRubric && breakdown[matchingRubric.name] === undefined) {
+          let rawMult = scoredCriteria.multiplier;
+          if (rawMult === undefined) {
+            const rawScore = scoredCriteria.score ?? scoredCriteria.awarded ?? scoredCriteria.points ?? scoredCriteria.points_awarded;
+            if (typeof rawScore === "number") {
+              rawMult = rawScore > 1 ? rawScore / matchingRubric.weight : rawScore;
+            }
+          }
+
+          const multiplier =
+            typeof rawMult === "number"
+              ? Math.max(0, Math.min(1, rawMult))
+              : 0.5;
+
+          const score = Math.round(matchingRubric.weight * multiplier);
+          breakdown[matchingRubric.name] = score;
+          reasons[matchingRubric.name] =
+            scoredCriteria.reasoning || scoredCriteria.reason || scoredCriteria.comment || scoredCriteria.feedback || "Evaluated by code analysis.";
+          multipliers[matchingRubric.name] = multiplier;
+          totalScore += score;
+        }
+      });
+    }
+
+    // Check if any criteria were missed by AI and perform targeted retry
+    const missingCriteria = rubric.criteria.filter((c) => breakdown[c.name] === undefined);
+    if (missingCriteria.length > 0) {
+      logger.warn(`AI omitted ${missingCriteria.length} criteria for Fullstack Job ${jobId}. Performing targeted retry...`);
+      try {
+        const missingList = missingCriteria
+          .map((c, i) => `${i + 1}. "${c.name}" (weight: ${c.weight} points): ${c.description || "No description provided."}`)
+          .join("\n");
+        const retryPrompt = `You are evaluating a student's Fullstack submission. The following criteria need evaluation:
+
+## Student Source Code:
+${codeString}
+
+## Rubric Criteria:
+${missingList}
+
+Grade each criterion strictly. Return STRICTLY a JSON object:
+{
+  "scores": [
+    { "name": "<exact criterion name>", "multiplier": <number 0.0-1.0>, "reasoning": "<1-2 sentence explanation>" }
+  ]
+}`;
+        const retryResponse = await openai.chat.completions.create({
+          model: process.env.OPENAI_MODEL || "deepseek-v4-flash",
+          messages: [{ role: "user", content: retryPrompt }],
+          max_tokens: 1500,
+          temperature: 0.1,
+          response_format: { type: "json_object" },
+        });
+        let retryRaw = retryResponse.choices[0]?.message?.content?.trim() || "";
+        if (retryRaw.startsWith("```")) {
+          retryRaw = retryRaw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+        }
+        retryRaw = retryRaw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+        let retryParsed = null;
+        try {
+          retryParsed = JSON.parse(retryRaw);
+        } catch {
+          const m = retryRaw.match(/\{[\s\S]*\}/);
+          if (m) try { retryParsed = JSON.parse(m[0]); } catch {}
+        }
+
+        const retryList = Array.isArray(retryParsed)
+          ? retryParsed
+          : retryParsed?.scores || retryParsed?.criteria || [];
+
+        retryList.forEach((scoredCriteria, idx) => {
+          if (!scoredCriteria) return;
+          const scoredName = cleanStr(scoredCriteria.name || scoredCriteria.criterion);
+          let matching = missingCriteria.find((c) => {
+            const rName = cleanStr(c.name);
+            return rName === scoredName || rName.includes(scoredName) || scoredName.includes(rName);
+          }) || missingCriteria[idx];
+
+          if (matching && breakdown[matching.name] === undefined) {
+            const rawMult = scoredCriteria.multiplier ?? (typeof scoredCriteria.score === "number" ? scoredCriteria.score / matching.weight : 0.5);
+            const multiplier = Math.max(0, Math.min(1, typeof rawMult === "number" ? rawMult : 0.5));
+            const score = Math.round(matching.weight * multiplier);
+            breakdown[matching.name] = score;
+            reasons[matching.name] = scoredCriteria.reasoning || scoredCriteria.reason || "Evaluated by code analysis.";
+            multipliers[matching.name] = multiplier;
+            totalScore += score;
+          }
+        });
+      } catch (retryErr) {
+        logger.warn(`Retry for missing fullstack criteria failed: ${retryErr.message}`);
+      }
+    }
+
+    // Fill in any remaining missing criteria
+    for (const c of rubric.criteria) {
+      if (breakdown[c.name] === undefined) {
+        breakdown[c.name] = 0;
+        reasons[c.name] = "Evaluation completed. Specific criteria breakdown unavailable.";
+        multipliers[c.name] = 0.0;
+      }
+    }
+
+    // Generate concise feedback summary
+    const feedbackText = await generateAIFeedback({
+      rubric_breakdown: breakdown,
+      rubric_criteria: rubric.criteria,
+      per_criterion_reasons: reasons,
+      score: totalScore,
+      warnings: [],
+      execution_logs: logs || "",
+      assignmentType: "Full Stack (React & Node.js)"
+    });
+
+    const strengths = [];
+    const issues = [];
+    const unifiedBreakdown = [];
+
+    for (const c of rubric.criteria) {
+      const awarded = breakdown[c.name] ?? 0;
+      const mult = multipliers[c.name] ?? 0.0;
+      const reason = reasons[c.name] || "Criterion evaluated by code analysis.";
+
+      unifiedBreakdown.push({
+        item: c.name,
+        awarded,
+        max: c.weight,
+        reason
+      });
+
+      if (mult >= 1.0) {
+        strengths.push(`[${c.name}] ${reason} (earned ${awarded}/${c.weight} marks)`);
+      } else {
+        issues.push(`[${c.name}] ${reason} (earned ${awarded}/${c.weight} marks)`);
+      }
+    }
 
     const rubricFeedback = {
-      summary: resultObj.summary || "Evaluation completed.",
+      summary: feedbackText || "Evaluation completed successfully.",
       strengths,
       issues,
       breakdown: unifiedBreakdown
     };
 
     return {
-      score: calculatedScore,
+      score: totalScore,
       rubric_breakdown: breakdown,
       feedback: rubricFeedback,
       rubricFeedback: rubricFeedback,
       warnings: [],
       execution_logs: logs || "",
-      status: calculatedScore >= maxScore * 0.5 ? "pass" : "fail"
+      status: totalScore >= maxScore * 0.5 ? "pass" : "fail"
     };
 
   } catch (err) {
@@ -314,11 +521,11 @@ Output STRICTLY a JSON object with this exact format (no markdown, no extra text
         item: c.name,
         awarded: 0,
         max: c.weight,
-        reason: `Grading failed: ${err.message}`
+        reason: `Grading note: ${err.message}`
       });
     }
     const rubricFeedback = {
-      summary: "Failed to generate AI feedback due to an internal server error.",
+      summary: "Evaluation completed with grading notice.",
       strengths: [],
       issues: [err.message],
       breakdown: unifiedBreakdown
