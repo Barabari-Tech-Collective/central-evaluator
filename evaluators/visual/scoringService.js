@@ -102,9 +102,11 @@ export function parseRubric(rubricData) {
       for (const line of lines) {
         const weightMatch = line.match(/\((\d+)\s*(?:pts?|points?|marks?|%)\)/i) ||
                             line.match(/\[(\d+)\s*(?:pts?|points?|marks?|%)\]/i) ||
-                            line.match(/(\d+)\s*(?:pts?|points?|marks?)\s*[-:]/i);
+                            line.match(/[-:]\s*(\d+)\s*(?:pts?|points?|marks?|%)/i) ||
+                            line.match(/(\d+)\s*(?:pts?|points?|marks?)\s*[-:]/i) ||
+                            line.match(/(\d+)\s*(?:pts?|points?|marks?|%)/i);
         const weight = weightMatch ? parseInt(weightMatch[1], 10) : 20;
-        const name = line.replace(/^\d+[\.\)]\s*/, '').replace(/^[-*•]\s*/, '').trim();
+        const name = line.replace(/^\d+[\.\)]\s*/, '').replace(/^[-* ]\s*/, '').replace(/[-:]\s*\d+\s*(?:pts?|points?|marks?|%).*$/i, '').trim();
         if (name) items.push({ name, weight, description: name });
       }
       return items.length > 0 ? { criteria: items } : { criteria: [
