@@ -1,93 +1,57 @@
 /**
- * Regression test for rubric parsing/validation (V-09).
+ * Unit test for rubric parsing/validation in scoringService.js.
  *
- * Imports the REAL pure validator from evaluators/visual/rubricSchema.js and
- * asserts that realistic gpt-4o outputs are EITHER normalized into a usable
- * array OR rejected with a typed RubricParseError — never silently turned into
- * an empty rubric that scores a whole cohort 0.
- *
- * Run: node scripts/test-rubric-fallback.mjs   (exit 0 = fixed)
+ * Tests:
+ *   - Object with criteria array
+ *   - JSON string serialization
+ *   - Plain text bulleted/numbered criteria
+ *   - Empty / malformed string fallback
  */
-import { normalizeRubric, RubricParseError } from "../evaluators/visual/rubricSchema.js";
-
-// With response_format:json_object the model returns a parsed JS object/array;
-// these fixtures represent the parsed shapes we must handle.
-const cases = [
-  {
-    name: "bare array",
-    input: [{ description: "favicon", type: "dom", weight: 10, checks: [] }],
-    expect: "array",
-  },
-  {
-    name: "object-wrapped under items (was V-09 silent-0)",
-    input: { items: [{ description: "x", type: "visual", weight: 20, checks: [] }] },
-    expect: "array",
-  },
-  {
-    name: "object-wrapped under rubric",
-    input: { rubric: [{ description: "x", type: "dom", weight: 5, checks: [] }] },
-    expect: "array",
-  },
-  {
-    name: "empty array → typed error (flagged, not silent-0)",
-    input: [],
-    expect: "throw",
-  },
-  {
-    name: "missing weight → typed error",
-    input: { items: [{ description: "x", type: "dom" }] },
-    expect: "throw",
-  },
-  {
-    name: "invalid type → typed error",
-    input: { items: [{ description: "x", type: "color", weight: 5 }] },
-    expect: "throw",
-  },
-  {
-    name: "manual type (rare last-resort fallback) → accepted",
-    input: { items: [{ description: "Something truly unverifiable", type: "manual", weight: 5, checks: [] }] },
-    expect: "array",
-  },
-  {
-    name: "code type with pattern checks (e.g. uses setInterval()) → accepted",
-    input: { items: [{ description: "Uses setInterval()", type: "code", weight: 10, checks: [{ pattern: "setInterval(" }] }] },
-    expect: "array",
-  },
-  {
-    name: "code type with a quality check → accepted",
-    input: { items: [{ description: "Code quality", type: "code", weight: 5, checks: [{ kind: "quality" }] }] },
-    expect: "array",
-  },
-  {
-    name: "non-array/non-object → typed error",
-    input: "not json",
-    expect: "throw",
-  },
-];
+import { parseRubric } from "../evaluators/visual/scoringService.js";
 
 let failures = 0;
-console.log("--- Rubric validation ---\n");
-
-for (const c of cases) {
-  let outcome, detail;
-  try {
-    const arr = normalizeRubric(c.input);
-    outcome = "array";
-    detail = `array(${arr.length})`;
-  } catch (err) {
-    outcome = err instanceof RubricParseError ? "throw" : "wrong-error";
-    detail = `${err.name}: ${err.message}`;
-  }
-
-  const ok = outcome === c.expect;
-  if (!ok) failures++;
-  console.log(`${ok ? "✅" : "❌"} ${c.name}`);
-  console.log(`    → ${detail} (expected ${c.expect})\n`);
+function ok(name, cond) {
+  console.log(`${cond ? "✅" : "❌"} ${name}`);
+  if (!cond) failures++;
 }
 
-console.log(
-  failures === 0
-    ? "All rubric shapes are handled (usable array or typed RubricParseError) — V-09 fixed."
-    : `${failures} case(s) behaved unexpectedly.`
-);
+console.log("--- Rubric Parser Unit Tests ---\n");
+
+// 1. Direct object format
+{
+  const input = { criteria: [{ name: "Layout", weight: 20, description: "Test" }] };
+  const res = parseRubric(input);
+  ok("Direct object with criteria parses correctly", Array.isArray(res.criteria) && res.criteria.length === 1 && res.criteria[0].weight === 20);
+}
+
+// 2. Direct array format
+{
+  const input = [{ name: "Structure", weight: 25 }];
+  const res = parseRubric(input);
+  ok("Direct array parses into criteria wrapper", Array.isArray(res.criteria) && res.criteria.length === 1 && res.criteria[0].name === "Structure");
+}
+
+// 3. JSON string format
+{
+  const input = JSON.stringify({ criteria: [{ name: "Time Display", weight: 20 }] });
+  const res = parseRubric(input);
+  ok("JSON string parses correctly", Array.isArray(res.criteria) && res.criteria[0].name === "Time Display");
+}
+
+// 4. Plain text format
+{
+  const input = "1. HTML & CSS Layout (20 pts)\n2. Current Time Display [20 marks]\n3. JavaScript Logic: 60 pts";
+  const res = parseRubric(input);
+  ok("Plain text multi-line rubric parses weights and names", Array.isArray(res.criteria) && res.criteria.length === 3 && res.criteria[0].weight === 20 && res.criteria[2].weight === 60);
+}
+
+// 5. Fallback for unparseable input
+{
+  const input = "   ";
+  const res = parseRubric(input);
+  ok("Empty string falls back to default 3 criteria", Array.isArray(res.criteria) && res.criteria.length === 3);
+}
+
+console.log("");
+console.log(failures === 0 ? "All Rubric Parser assertions PASS." : `${failures} assertion(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

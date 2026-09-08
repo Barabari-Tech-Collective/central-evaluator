@@ -91,7 +91,7 @@ async function getProjectCodeString(projectPath) {
   return codeStr;
 }
 
-function parseRubric(rubricData) {
+export function parseRubric(rubricData) {
   if (typeof rubricData === 'string') {
     try {
       rubricData = JSON.parse(rubricData);
