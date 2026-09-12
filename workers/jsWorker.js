@@ -174,7 +174,7 @@ export async function initializeJsWorker() {
 
           logger.info(`JS Job ${job.id} completed via GitHub Actions. Generating AI feedback...`);
           
-          const summaryStr = await generateJSAIFeedback(job.data, results, finalScore);
+          const summaryStr = await generateJSAIFeedback(job.data, results, finalScore, breakdown, rubric);
           
           const aiFeedbackString = {
             summary: summaryStr,

@@ -114,7 +114,7 @@ export async function initializePythonWorker() {
 
             logger.info(`Python Job ${job.id} completed via GitHub Actions. Generating AI feedback...`);
             
-            const summaryStr = await generatePythonAIFeedback(job.data, results, finalScore);
+            const summaryStr = await generatePythonAIFeedback(job.data, results, finalScore, breakdown, rubric);
             
             const aiFeedbackString = {
               summary: summaryStr,

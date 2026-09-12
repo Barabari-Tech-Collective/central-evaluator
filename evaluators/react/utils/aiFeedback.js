@@ -53,46 +53,140 @@ function getClient() {
  * @returns {Promise<string>} feedback - A comprehensive, instructional review with code fixes
  */
 export async function generateAIFeedback({
-  rubric_breakdown,
-  rubric_criteria,
-  per_criterion_reasons,
-  score,
-  warnings,
-  execution_logs,
+  rubric_breakdown = {},
+  rubric_criteria = [],
+  per_criterion_reasons = {},
+  score = 0,
+  warnings = [],
+  execution_logs = '',
   assignmentType = 'React',
   codeSnippet = '',
 }) {
-  // Directly use the clean, concise feedback format matching the facilitator dashboard
-  return buildFallbackFeedback(rubric_breakdown, score, warnings, assignmentType);
+  const maxScore = rubric_criteria.length > 0
+    ? rubric_criteria.reduce((sum, c) => sum + (c.weight || 0), 0)
+    : 100;
+
+  const percentage = maxScore > 0 ? Math.round((score / maxScore) * 100) : score;
+
+  // 1. If 100% and zero warnings/failures, return clean high-achievement praise
+  if (percentage === 100 && (!warnings || warnings.length === 0)) {
+    return `Excellent work! All criteria passed successfully with a perfect score. Your ${assignmentType} application is well-structured, follows best practices, and is fully functional.`;
+  }
+
+  const openai = getClient();
+  if (!openai) {
+    return buildFallbackFeedback(rubric_breakdown, rubric_criteria, per_criterion_reasons, score, maxScore, warnings, assignmentType);
+  }
+
+  // 2. Build detailed technical breakdown for prompt
+  const criteriaDetails = rubric_criteria.map(c => {
+    const awarded = rubric_breakdown[c.name] ?? 0;
+    const reason = per_criterion_reasons[c.name] || '';
+    const status = awarded >= c.weight ? 'PASSED' : (awarded === 0 ? 'FAILED' : 'PARTIALLY PASSED');
+    return `- [${status}] "${c.name}" (Awarded: ${awarded}/${c.weight} pts): ${c.description || ''}${reason ? ` | Evaluation Finding: ${reason}` : ''}`;
+  }).join('\n');
+
+  // Truncate code snippet and logs to conserve tokens while preserving technical details
+  const truncatedCode = codeSnippet ? codeSnippet.slice(0, 3000) : '';
+  const truncatedLogs = execution_logs ? execution_logs.slice(0, 1500) : '';
+
+  const prompt = `
+You are a senior tech lead and engineering instructor evaluating a student's ${assignmentType} project.
+
+## Student Result Summary:
+- Assignment Type: ${assignmentType}
+- Total Score: ${score}/${maxScore} (${percentage}%)
+- Rubric Breakdown & Evaluation Findings:
+${criteriaDetails || 'No specific criteria breakdown available.'}
+
+${warnings && warnings.length > 0 ? `## Execution Warnings:\n${warnings.join('\n')}\n` : ''}
+${truncatedLogs ? `## Test / Execution Logs:\n${truncatedLogs}\n` : ''}
+${truncatedCode ? `## Student Code Excerpt:\n\`\`\`\n${truncatedCode}\n\`\`\`\n` : ''}
+
+## Instructions:
+1. Write 2 to 4 concise, informative, and encouraging sentences directly addressing the student's actual results.
+2. Directly reference specific technical components, functions, routes, middleware, or DOM elements that worked or caused failures based on the evaluation findings, code, and logs.
+3. If the score is low or there are failing criteria, explain the root cause and provide ONE actionable, concrete suggestion to fix it.
+4. CRITICAL: Never contradict the score. If the student received a low score (e.g., < 60) or failed criteria, do NOT say "Great work! All criteria passed successfully" or "fully functional".
+5. Use stack-appropriate vocabulary for ${assignmentType} (do NOT mention React components or props on a Node/Express backend assignment; do NOT mention routes/database on a frontend DOM assignment).
+6. Return plain text only. Do NOT use markdown headers, bullet points, or quotation marks around the entire response.
+`.trim();
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || "deepseek-v4-flash",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 300,
+      temperature: 0.3,
+    });
+
+    const feedback = response.choices[0]?.message?.content?.trim();
+    return feedback || buildFallbackFeedback(rubric_breakdown, rubric_criteria, per_criterion_reasons, score, maxScore, warnings, assignmentType);
+  } catch (err) {
+    logger.error(`[AIFeedback] LLM feedback generation failed: ${err.message}`);
+    return buildFallbackFeedback(rubric_breakdown, rubric_criteria, per_criterion_reasons, score, maxScore, warnings, assignmentType);
+  }
 }
 
 /**
  * Rule-based fallback feedback used when AI is unavailable or fails.
  */
-function buildFallbackFeedback(rubric_breakdown, score, warnings, assignmentType = 'React') {
-  const passed = Object.entries(rubric_breakdown)
-    .filter(([, pts]) => pts > 0)
-    .map(([name]) => name);
+function buildFallbackFeedback(
+  rubric_breakdown = {},
+  rubric_criteria = [],
+  per_criterion_reasons = {},
+  score = 0,
+  maxScore = 100,
+  warnings = [],
+  assignmentType = 'React'
+) {
+  const percentage = maxScore > 0 ? Math.round((score / maxScore) * 100) : score;
 
-  const failed = Object.entries(rubric_breakdown)
-    .filter(([, pts]) => pts === 0)
-    .map(([name]) => name);
+  const fullyPassed = [];
+  const partialOrFailed = [];
 
-  if (failed.length === 0) {
+  if (rubric_criteria && rubric_criteria.length > 0) {
+    for (const c of rubric_criteria) {
+      const awarded = rubric_breakdown[c.name] ?? 0;
+      if (awarded >= c.weight) {
+        fullyPassed.push(c.name);
+      } else {
+        partialOrFailed.push(c.name);
+      }
+    }
+  } else {
+    for (const [name, pts] of Object.entries(rubric_breakdown)) {
+      if (pts > 0) fullyPassed.push(name);
+      else partialOrFailed.push(name);
+    }
+  }
+
+  // Only praise if score is actually high (>= 90%) AND no criteria failed
+  if (percentage >= 90 && partialOrFailed.length === 0) {
     return `Great work! All criteria passed successfully. Your ${assignmentType} application is well-structured and fully functional.`;
   }
 
-  const passedStr =
-    passed.length > 0
-      ? `You successfully implemented: ${passed.join(', ')}.\n\n`
-      : '';
-  const failedStr = `The following areas need attention: ${failed.join(', ')}.\n\n`;
-  const tip =
-    assignmentType.includes('DOM') || assignmentType.includes('HTML')
-      ? 'Review the failing criteria to ensure all DOM element selectors, event listeners, and live updates match the specification.'
-      : 'Review the failing criteria and ensure your components, state management, and props are correctly implemented.';
+  const passedStr = fullyPassed.length > 0
+    ? `You successfully implemented: ${fullyPassed.join(', ')}. `
+    : '';
 
-  return passedStr + failedStr + tip;
+  const issuesStr = partialOrFailed.length > 0
+    ? `The following areas need attention: ${partialOrFailed.join(', ')}. `
+    : '';
+
+  let tip = '';
+  const typeLower = (assignmentType || '').toLowerCase();
+  if (typeLower.includes('node') || typeLower.includes('backend') || typeLower.includes('express')) {
+    tip = 'Review the failing criteria and ensure your API endpoints, middleware, routing, and database queries handle error states and match specifications.';
+  } else if (typeLower.includes('dom') || typeLower.includes('html')) {
+    tip = 'Review the failing criteria to ensure all DOM element selectors, event listeners, and live UI updates match the specification.';
+  } else if (typeLower.includes('python')) {
+    tip = 'Review the failing criteria to ensure function return values, type conversions, and print outputs match the required format.';
+  } else {
+    tip = 'Review the failing criteria and ensure your components, state management, props, and lifecycle hooks are correctly implemented.';
+  }
+
+  return `${passedStr}${issuesStr}${tip}`.trim();
 }
 
 /**

@@ -1,4 +1,4 @@
-import { generateAIFeedback } from "../react/utils/aiFeedback.js";
+import { generateVisualAIFeedback } from "./feedbackService.js";
 import logger from "../../config/logger.js";
 import fs from "fs/promises";
 import path from "path";
@@ -145,19 +145,34 @@ export default async function scoreSubmission(rawRubric, projectPath, githubRepo
 
   if (!codeString) {
     logger.warn("No source files found in student repo.");
+    const zeroMaxScore = rubric.criteria.reduce((sum, c) => sum + (c.weight || 0), 0) || 100;
     for (const c of rubric.criteria) {
       breakdown[c.name] = 0;
     }
-    const feedback = await generateAIFeedback({
+    const feedbackText = await generateVisualAIFeedback({
       rubric_breakdown: breakdown,
+      rubric_criteria: rubric.criteria,
       score: 0,
+      maxScore: zeroMaxScore,
       warnings: ["No source files found in the repository."],
       execution_logs: githubReport || "",
     });
+    const zeroFeedback = {
+      summary: feedbackText,
+      strengths: [],
+      issues: ["No source files found in the repository."],
+      breakdown: rubric.criteria.map(c => ({
+        item: c.name,
+        awarded: 0,
+        max: c.weight,
+        reason: "No source files found."
+      }))
+    };
     return {
       score: 0,
       rubric_breakdown: breakdown,
-      feedback,
+      feedback: zeroFeedback,
+      rubricFeedback: zeroFeedback,
       warnings: ["No source files found in the repository."],
       execution_logs: githubReport || "",
       status: "fail",
@@ -423,14 +438,14 @@ Grade each criterion strictly. Return STRICTLY a JSON object:
   const status = totalScore >= maxScore * 0.5 ? "pass" : "fail";
 
   logger.info(`Generating visual feedback for total score: ${totalScore}/${maxScore}`);
-  const feedbackText = await generateAIFeedback({
+  const feedbackText = await generateVisualAIFeedback({
     rubric_breakdown: breakdown,
     rubric_criteria: rubric.criteria,
     per_criterion_reasons: reasons,
     score: totalScore,
+    maxScore,
     warnings,
     execution_logs: githubReport || "",
-    assignmentType: "HTML, CSS & JavaScript DOM",
     codeSnippet: codeString || "",
   });
 
@@ -450,11 +465,18 @@ Grade each criterion strictly. Return STRICTLY a JSON object:
       reason
     });
 
-    if (mult === 1.0) {
+    if (mult >= 0.8 || awarded === c.weight) {
       strengths.push(`[${c.name}] ${reason} (earned ${awarded}/${c.weight} marks)`);
     } else {
       issues.push(`[${c.name}] ${reason} (earned ${awarded}/${c.weight} marks)`);
     }
+  }
+
+  if (strengths.length === 0 && totalScore === maxScore) {
+    strengths.push("All criteria passed successfully.");
+  }
+  if (issues.length === 0 && totalScore < maxScore) {
+    issues.push("Some criteria received partial marks.");
   }
 
   const rubricFeedback = {

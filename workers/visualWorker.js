@@ -98,7 +98,7 @@ export async function initializeVisualWorker() {
           );
           
           logger.info(`Visual Job ${job.id} completed entirely.`);
-          return { success: true, result: results };
+          return { success: true, results, result: results };
         } catch (err) {
           logger.error(`Visual Job ${job.id} failed`, err);
           throw err;

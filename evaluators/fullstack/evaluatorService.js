@@ -5,7 +5,6 @@ import fs from 'fs';
 import { cloneRepo, deleteRepo } from '../react/repoService.js';
 import { scoreFromTestResults } from './scoringService.js';
 import { generateFullstackFeedback } from './feedbackService.js';
-import { generateAIFeedback } from '../react/utils/aiFeedback.js';
 
 let client = null;
 
@@ -130,7 +129,15 @@ export async function evaluateFullstackProject(payload, jobId, testResults, logs
     }
 
     // Generate technical AI review paragraph
-    const feedbackText = await generateFullstackFeedback(testDetails, rubric);
+    const feedbackText = await generateFullstackFeedback({
+      score: testGrading.score,
+      maxScore,
+      rubric_breakdown: testGrading.rubric_breakdown,
+      rubric_criteria: rubric.criteria,
+      per_criterion_reasons: testGrading.reasons,
+      testDetails,
+      execution_logs: logs || "",
+    });
 
     // Format output to match other evaluators
     const strengths = [];
@@ -149,11 +156,18 @@ export async function evaluateFullstackProject(payload, jobId, testResults, logs
         reason
       });
 
-      if (mult >= 1.0) {
+      if (mult >= 0.8 || awarded === c.weight) {
         strengths.push(`[${c.name}] ${reason} (earned ${awarded}/${c.weight} marks)`);
       } else {
         issues.push(`[${c.name}] ${reason} (earned ${awarded}/${c.weight} marks)`);
       }
+    }
+
+    if (strengths.length === 0 && testGrading.score === maxScore) {
+      strengths.push("All criteria passed successfully.");
+    }
+    if (issues.length === 0 && testGrading.score < maxScore) {
+      issues.push("Some criteria received partial marks.");
     }
 
     const rubricFeedback = {
@@ -461,14 +475,14 @@ Grade each criterion strictly. Return STRICTLY a JSON object:
     }
 
     // Generate concise feedback summary
-    const feedbackText = await generateAIFeedback({
+    const feedbackText = await generateFullstackFeedback({
+      score: totalScore,
+      maxScore,
       rubric_breakdown: breakdown,
       rubric_criteria: rubric.criteria,
       per_criterion_reasons: reasons,
-      score: totalScore,
-      warnings: [],
+      codeSnippet: codeString || "",
       execution_logs: logs || "",
-      assignmentType: "Full Stack (React & Node.js)"
     });
 
     const strengths = [];
@@ -487,11 +501,18 @@ Grade each criterion strictly. Return STRICTLY a JSON object:
         reason
       });
 
-      if (mult >= 1.0) {
+      if (mult >= 0.8 || awarded === c.weight) {
         strengths.push(`[${c.name}] ${reason} (earned ${awarded}/${c.weight} marks)`);
       } else {
         issues.push(`[${c.name}] ${reason} (earned ${awarded}/${c.weight} marks)`);
       }
+    }
+
+    if (strengths.length === 0 && totalScore === maxScore) {
+      strengths.push("All criteria passed successfully.");
+    }
+    if (issues.length === 0 && totalScore < maxScore) {
+      issues.push("Some criteria received partial marks.");
     }
 
     const rubricFeedback = {

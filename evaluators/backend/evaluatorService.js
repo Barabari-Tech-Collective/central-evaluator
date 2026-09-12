@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { cloneRepo, deleteRepo } from '../react/repoService.js';
 import { scoreFromTestResults } from './scoringService.js';
-import { generateAIFeedback } from '../react/utils/aiFeedback.js';
+import { generateBackendAIFeedback } from './feedbackService.js';
 
 let client = null;
 
@@ -118,7 +118,7 @@ export async function evaluateBackendProject(payload, jobId, testResults, logs, 
     const status = testGrading.score >= maxScore * 0.5 ? "pass" : "fail";
     
     // Generate concise, clean feedback summary matching react/visual style
-    const feedbackText = await generateAIFeedback({
+    const feedbackText = await generateBackendAIFeedback({
       rubric_breakdown: testGrading.rubric_breakdown,
       rubric_criteria: rubric.criteria,
       per_criterion_reasons: testGrading.reasons,
@@ -456,14 +456,15 @@ Grade each criterion strictly. Return STRICTLY a JSON object:
     }
 
     // Generate concise feedback summary
-    const feedbackText = await generateAIFeedback({
+    const feedbackText = await generateBackendAIFeedback({
       rubric_breakdown: breakdown,
       rubric_criteria: rubric.criteria,
       per_criterion_reasons: reasons,
       score: totalScore,
       warnings: [],
       execution_logs: logs || "",
-      assignmentType: "Node.js & Express Backend"
+      assignmentType: "Node.js & Express Backend",
+      codeSnippet: codeString || ""
     });
 
     const strengths = [];
