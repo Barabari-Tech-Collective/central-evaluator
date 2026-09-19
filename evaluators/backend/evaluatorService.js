@@ -238,12 +238,16 @@ Read the source code carefully to determine if the functionality requested in th
 Check for proper routes, controller logic, middleware, database models/queries, and error handling.
 Do NOT penalize if .env file is missing (expected for security reasons).
 
-Assign a score multiplier between 0.0 and 1.0 for EACH criterion:
-- 1.0 = Fully meets all exact requirements for this criterion
-- 0.7-0.9 = Mostly correct with minor gaps
-- 0.4-0.6 = Partial implementation
-- 0.1-0.3 = Bare minimum skeleton
-- 0.0 = Not attempted, completely missing, or completely unrelated project
+Assign a discrete score multiplier for EACH criterion based strictly on verified code evidence:
+- 1.0 = Fully meets all exact requirements for this criterion (routes, controllers, models, and middleware complete and correct).
+- 0.8 = Mostly correct with only minor syntax, naming, or formatting gaps.
+- 0.5 = Partial implementation of the required endpoint or logic.
+- 0.2 = Bare minimum skeleton or stub only.
+- 0.0 = Not attempted, completely missing, or completely unrelated project.
+
+CRITICAL SCORING RULE:
+Use ONLY the discrete multipliers: 1.0, 0.8, 0.5, 0.2, or 0.0.
+Do NOT use intermediate or arbitrary decimal values like 0.84, 0.91, 0.73, etc.
 
 For EACH criterion write a concise 1-2 sentence explanation:
 1. States specifically what was FOUND in the source code (cite route paths, function names, middleware, or queries).
@@ -255,7 +259,7 @@ You MUST evaluate and return a score entry for ALL ${rubric.criteria.length} cri
 Output STRICTLY a JSON object (no markdown, no extra text):
 {
   "scores": [
-    { "name": "<exact criterion name>", "multiplier": <number 0.0-1.0>, "reasoning": "<1-2 sentence concise explanation>" }
+    { "name": "<exact criterion name>", "multiplier": <number 0.0, 0.2, 0.5, 0.8, or 1.0>, "reasoning": "<1-2 sentence concise explanation>" }
   ]
 }`;
 
@@ -265,7 +269,8 @@ Output STRICTLY a JSON object (no markdown, no extra text):
       model: process.env.OPENAI_MODEL || "deepseek-v4-flash",
       messages: [{ role: "user", content: prompt }],
       max_tokens: 3000,
-      temperature: 0.1,
+      temperature: 0.0,
+      seed: 42,
       response_format: { type: "json_object" },
     });
 
@@ -393,17 +398,18 @@ ${codeString}
 ## Rubric Criteria:
 ${missingList}
 
-Grade each criterion strictly. Return STRICTLY a JSON object:
+Grade each criterion strictly using discrete multipliers (1.0, 0.8, 0.5, 0.2, or 0.0). Return STRICTLY a JSON object:
 {
   "scores": [
-    { "name": "<exact criterion name>", "multiplier": <number 0.0-1.0>, "reasoning": "<1-2 sentence explanation>" }
+    { "name": "<exact criterion name>", "multiplier": <number 0.0, 0.2, 0.5, 0.8, or 1.0>, "reasoning": "<1-2 sentence explanation>" }
   ]
 }`;
         const retryResponse = await openai.chat.completions.create({
           model: process.env.OPENAI_MODEL || "deepseek-v4-flash",
           messages: [{ role: "user", content: retryPrompt }],
           max_tokens: 1500,
-          temperature: 0.1,
+          temperature: 0.0,
+          seed: 42,
           response_format: { type: "json_object" },
         });
         let retryRaw = retryResponse.choices[0]?.message?.content?.trim() || "";

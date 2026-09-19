@@ -295,12 +295,16 @@ CRITICAL RULES:
    - If the Build Report says "Build: Failed" or "failed to compile", they can STILL get partial credit for criteria that are fully correct in the source code (Setup, State, Input, Completion/Deletion).
    - However, "UI Structure & CSS Styling" must be capped at max 5 marks if the build failed, as we cannot verify dynamic rendering at runtime.
 
-Assign a score multiplier between 0.0 and 1.0:
-- 1.0 = Fully meets all exact requirements for this criterion
-- 0.7-0.9 = Correct with minor gaps (e.g. missing empty-input check, or linter warnings)
-- 0.4-0.6 = Partial implementation of the exact feature
-- 0.1-0.3 = Bare minimum skeleton of the exact feature
-- 0.0 = Not attempted, completely missing, or irrelevant project code
+Assign a discrete score multiplier for EACH criterion based strictly on verified code evidence:
+- 1.0 = Fully meets all exact requirements for this criterion.
+- 0.8 = Correct with only minor gaps or formatting issues (e.g. missing empty-input check, or minor linter warnings).
+- 0.5 = Partial implementation of the exact feature.
+- 0.2 = Bare minimum skeleton of the exact feature.
+- 0.0 = Not attempted, completely missing, or irrelevant project code.
+
+CRITICAL SCORING RULE:
+Use ONLY the discrete multipliers: 1.0, 0.8, 0.5, 0.2, or 0.0.
+Do NOT use intermediate or arbitrary decimal values like 0.85, 0.92, 0.74, etc.
 
 For EACH criterion write a detailed 2-3 sentence reasoning that:
 1. States specifically what was FOUND in the source code files (cite actual code, function/state names, or lines).
@@ -310,11 +314,9 @@ For EACH criterion write a detailed 2-3 sentence reasoning that:
 Output STRICTLY a JSON object (no markdown, no extra text):
 {
   "scores": [
-    { "name": "<exact criterion name>", "multiplier": <number 0.0-1.0>, "reasoning": "<2-3 sentence code-specific explanation>" }
+    { "name": "<exact criterion name>", "multiplier": <number 0.0, 0.2, 0.5, 0.8, or 1.0>, "reasoning": "<2-3 sentence code-specific explanation>" }
   ]
 }`;
-
-
 
     try {
       logger.info("Sending code to Groq AI for rubric-based scoring...");
@@ -323,7 +325,8 @@ Output STRICTLY a JSON object (no markdown, no extra text):
         model: process.env.OPENAI_MODEL || "deepseek-v4-flash",
         messages: [{ role: "user", content: prompt }],
         max_tokens: 3000,
-        temperature: 0.1,
+        temperature: 0.0,
+        seed: 42,
         response_format: { type: "json_object" },
       });
 
@@ -453,17 +456,18 @@ ${codeString}
 ## Rubric Criteria:
 ${missingList}
 
-Grade each criterion strictly. Return STRICTLY a JSON object:
+Grade each criterion strictly using discrete multipliers (1.0, 0.8, 0.5, 0.2, or 0.0). Return STRICTLY a JSON object:
 {
   "scores": [
-    { "name": "<exact criterion name>", "multiplier": <number 0.0-1.0>, "reasoning": "<2-3 sentence explanation>" }
+    { "name": "<exact criterion name>", "multiplier": <number 0.0, 0.2, 0.5, 0.8, or 1.0>, "reasoning": "<2-3 sentence explanation>" }
   ]
 }`;
           const retryResponse = await groq.chat.completions.create({
             model: process.env.OPENAI_MODEL || "deepseek-v4-flash",
             messages: [{ role: "user", content: retryPrompt }],
             max_tokens: 1500,
-            temperature: 0.1,
+            temperature: 0.0,
+            seed: 42,
             response_format: { type: "json_object" },
           });
           let retryRaw = retryResponse.choices[0]?.message?.content?.trim() || "";

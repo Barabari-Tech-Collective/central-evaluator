@@ -181,7 +181,8 @@ ${studentCode}
       model: process.env.OPENAI_MODEL || "deepseek-v4-flash",
       messages: [{ role: "user", content: prompt }],
       max_tokens: 250,
-      temperature: 0.3,
+      temperature: 0.0,
+      seed: 42,
     });
 
     const feedback = response.choices[0]?.message?.content?.trim();
