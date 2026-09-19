@@ -98,7 +98,8 @@ ${truncatedCode ? `## Student Backend Source Code:\n\`\`\`javascript\n${truncate
       model: process.env.OPENAI_MODEL || "deepseek-v4-flash",
       messages: [{ role: "user", content: prompt }],
       max_tokens: 300,
-      temperature: 0.3,
+      temperature: 0.0,
+      seed: 42,
     });
 
     const feedback = response.choices[0]?.message?.content?.trim();
@@ -206,7 +207,8 @@ Your response:
       messages: [{ role: 'user', content: prompt }],
       model: process.env.OPENAI_MODEL || 'deepseek-v4-flash',
       max_tokens: 300,
-      temperature: 0.4,
+      temperature: 0.0,
+      seed: 42,
     });
 
     return chatCompletion.choices[0]?.message?.content?.trim() || "Evaluation completed. Some tests failed.";

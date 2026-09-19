@@ -117,7 +117,8 @@ ${truncatedCode ? `## Student Code Excerpt:\n\`\`\`\n${truncatedCode}\n\`\`\`\n`
       model: process.env.OPENAI_MODEL || "deepseek-v4-flash",
       messages: [{ role: "user", content: prompt }],
       max_tokens: 300,
-      temperature: 0.3,
+      temperature: 0.0,
+      seed: 42,
     });
 
     const feedback = response.choices[0]?.message?.content?.trim();
@@ -241,9 +242,18 @@ Read these main files from the student's submission:
 ${codeStr}
 
 Evaluate component breakdown, hook usage, and React best practices.
+Assign a discrete score multiplier based strictly on verified code quality:
+- 1.0 = Excellent structure, clean hooks, idiomatic component decomposition.
+- 0.8 = Good structure with minor gaps (e.g., slightly large components, minor prop drilling).
+- 0.5 = Partial structure (some components split, but messy state management).
+- 0.2 = Minimal effort (almost everything dumped in one file).
+- 0.0 = No valid React code or broken structure.
+
+Use ONLY the discrete multipliers: 1.0, 0.8, 0.5, 0.2, or 0.0. Do NOT use arbitrary floating-point values.
+
 Output STRICTLY a JSON object:
 {
-  "scoreMultiplier": <number strictly between 0.0 and 1.0 representing percentage grade>,
+  "scoreMultiplier": <number 0.0, 0.2, 0.5, 0.8, or 1.0>,
   "reasoning": "<1 sentence explanation on what was good or bad>"
 }
 Do NOT include any markdown or text besides the raw JSON object.
@@ -253,7 +263,8 @@ Do NOT include any markdown or text besides the raw JSON object.
       model: process.env.OPENAI_MODEL || "deepseek-v4-flash",
       messages: [{ role: "user", content: prompt }],
       max_tokens: 150,
-      temperature: 0.1,
+      temperature: 0.0,
+      seed: 42,
       response_format: { type: "json_object" }
     });
 
