@@ -32,6 +32,7 @@ import OpenAI from "openai";
 import { getBrowserPool } from "./browserPool.js";
 import { startStaticServer } from "./localServerService.js";
 import { assertSafeUrl } from "./utils/urlGuard.js";
+import { cloneRepo, deleteRepo } from "../react/repoService.js";
 import logger from "../../config/logger.js";
 
 // V-42: lazy init so a missing OPENAI_API_KEY doesn't crash the server at boot.
@@ -592,4 +593,41 @@ export async function evaluateStudentsWithVision({
   }
 
   return results;
+}
+
+/**
+ * Universal adapter for workers/callers expecting evaluateVisualProject
+ */
+export async function evaluateVisualProject(payload, jobId, githubReport) {
+  const rawPath = payload?.repoUrl || payload?.projectPath || "";
+  const rubricText = typeof payload?.rubric === 'string'
+    ? payload.rubric
+    : (payload?.rubricText || JSON.stringify(payload?.rubric || {}));
+  const expectedUrl = payload?.expectedUrl || process.env.DEFAULT_EXPECTED_URL || "http://localhost:3000";
+
+  const isRemote = typeof rawPath === 'string' && (rawPath.startsWith('http://') || rawPath.startsWith('https://') || rawPath.startsWith('git@'));
+  let localPath = rawPath;
+  let didClone = false;
+
+  if (isRemote) {
+    localPath = await cloneRepo(rawPath);
+    didClone = true;
+  }
+
+  try {
+    return await evaluateStudentsWithVision({
+      jobId,
+      assignmentId: payload?.assignmentId || jobId,
+      studentId: payload?.studentId || "student",
+      studentName: payload?.studentName || "Student",
+      repoPath: localPath,
+      rubricText,
+      expectedUrl,
+      entryFile: payload?.entryFile || null
+    });
+  } finally {
+    if (didClone && localPath) {
+      await deleteRepo(localPath);
+    }
+  }
 }
