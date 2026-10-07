@@ -92,12 +92,15 @@ async function generateVisualAIFeedback({ studentName, rubric, score, domBreakdo
 
   try {
     const criteriaSummary = (unifiedBreakdown || []).map((b, i) => {
-      return `Criterion ${i + 1}: "${b.item}" (${b.max} marks)`;
+      const status = b.awarded === b.max ? "PASSED" : (b.awarded > 0 ? "PARTIAL" : "FAILED");
+      return `Criterion ${i + 1}: "${b.item}" [${status}] (${b.awarded}/${b.max} marks) - automated finding: ${b.reason || ""}`;
     }).join("\n");
 
     const prompt = `You are an expert, objective code evaluator assessing a student's HTML/CSS/JavaScript project.
-Candidate Submission
-Rubric Criteria:
+Candidate Submission: ${studentName || "Student"}
+Overall Automated Score: ${score?.total ?? 0}/${score?.maxTotal ?? 100} (${score?.normalized ?? 0}%)
+
+Rubric Criteria & Automated Test Results:
 ${criteriaSummary}
 
 Candidate's Actual Source Code:
@@ -105,13 +108,7 @@ ${(sourceText || "").slice(0, 15000)}
 
 Your evaluation guidelines:
 1. "reconciliation": Inspect the candidate's code against each criterion in the EXACT order listed above:
-   - For each criterion, assign a discrete "status":
-     * "perfect": The requirement is completely met with clean, functional, bug-free code. (Earns 100% of criterion marks).
-     * "minor_gap": The feature works fundamentally, but has minor defects or edge-case omissions (e.g. unpadded digits in 24-hour mode like '9:05:03', toggle button label text does not update after click, minor styling issue). (Earns 85% of criterion marks).
-     * "major_gap": The feature partially works, but has major logic flaws, off-by-one errors (e.g. wrong month in date), or empty placeholder elements with content outside. (Earns 60% of criterion marks).
-     * "broken": Missing, non-functional, empty stubs, or completely broken. (Earns 0 marks).
-     * "upward_reconciled": Automated tests gave 0 because of different element IDs/class names, but the candidate's code genuinely implemented the feature correctly. (Earns 100% if perfect, or 85% if minor defects).
-   - "reason": 1-2 concise, technical sentences citing the candidate's actual code (mentioning specific variables, element IDs/classes, or functions) and explaining why this status was chosen.
+   - "reason": 1-2 concise, technical sentences citing the candidate's actual code (mentioning specific variables, element IDs/classes, or functions) explaining why this result was achieved.
 2. "summary": 2-3 concise, honest, and educational sentences summarizing what the candidate achieved, citing what worked well and what specifically was missing or had gaps in their code. Include one concrete actionable tip to improve.
 3. "strengths": Array of strings for criteria that passed or excelled. Each string MUST start with "[<Exact Criterion Name>] " and give a 1-2 sentence technical explanation citing what the candidate specifically implemented in their HTML, CSS, or JS (citing actual element tags, classes, functions, or APIs).
 4. "issues": Array of strings for criteria that have bugs, gaps, or lost marks. Each string MUST start with "[<Exact Criterion Name>] " and explain specifically what was missing, incorrect, or incomplete in their code. If and only if the candidate has 100% flawless implementation, provide 1 subtle best-practice suggestion or leave empty.
@@ -125,7 +122,6 @@ Return STRICT JSON only matching this format:
     {
       "criterionIndex": 1,
       "item": "<Exact Criterion Name>",
-      "status": "perfect" | "minor_gap" | "major_gap" | "broken" | "upward_reconciled",
       "reason": "..."
     }
   ]
@@ -149,6 +145,12 @@ Return STRICT JSON only matching this format:
   return null;
 }
 
+export function clearEvaluationCache() {
+  EVALUATION_CACHE.clear();
+  EXPECTED_CACHE.clear();
+  logger.info("Cleared EVALUATION_CACHE and EXPECTED_CACHE");
+}
+
 export async function evaluateStudentsWithVision({
   jobId,
   assignmentId,
@@ -157,9 +159,10 @@ export async function evaluateStudentsWithVision({
   repoPath,
   rubricText,
   expectedUrl,
-  entryFile = null
+  entryFile = null,
+  skipCache = false
 }) {
-  if (!repoPath || !rubricText || !expectedUrl) {
+  if (!repoPath || !rubricText) {
     throw new Error("Missing required inputs");
   }
 
@@ -190,9 +193,10 @@ export async function evaluateStudentsWithVision({
   // no browser needed, so run them independently of the render pipeline below.
   const sourceText = await readSourceText(student);
   const sourceHash = crypto.createHash("sha256").update(sourceText || "").digest("hex");
-  const evalCacheKey = `${assignmentId || ""}::${sourceHash}`;
+  const rubricHash = crypto.createHash("sha256").update(rubricText || "").digest("hex").slice(0, 10);
+  const evalCacheKey = `${assignmentId || ""}::${rubricHash}::${sourceHash}`;
 
-  if (EVALUATION_CACHE.has(evalCacheKey)) {
+  if (!skipCache && process.env.DISABLE_EVALUATION_CACHE !== "true" && EVALUATION_CACHE.has(evalCacheKey)) {
     try {
       const raw = await EVALUATION_CACHE.get(evalCacheKey);
       if (raw && raw.score !== undefined && !raw.error) {
@@ -240,18 +244,32 @@ export async function evaluateStudentsWithVision({
     context = await browser.newContext({ viewport: VIEWPORT }); // V-23
 
     // ---- Reference (expected) screenshot, cached per assignment (V-29) ----
+    // Skip if expectedUrl is absent, a localhost/private address, or any other
+    // URL that fails the safety guard — fall through to code-only AI scoring.
+    const isUnsafeOrMissing = (
+      !expectedUrl ||
+      /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(expectedUrl) ||
+      expectedUrl === 'https://example.com'
+    );
     const cacheKey = `${assignmentId || ""}::${expectedUrl}`;
-    let expectedPromise = EXPECTED_CACHE.get(cacheKey);
-    if (!expectedPromise) {
-      expectedPromise = renderExpectedScreenshot(context, expectedUrl);
-      setExpectedCache(cacheKey, expectedPromise);
-    }
-    let expectedImg;
-    try {
-      expectedImg = await expectedPromise;
-    } catch (err) {
-      EXPECTED_CACHE.delete(cacheKey); // don't cache a failure
-      throw err;
+    let expectedImg = null;
+    if (!isUnsafeOrMissing) {
+      let expectedPromise = EXPECTED_CACHE.get(cacheKey);
+      if (!expectedPromise) {
+        expectedPromise = renderExpectedScreenshot(context, expectedUrl);
+        setExpectedCache(cacheKey, expectedPromise);
+      }
+      try {
+        expectedImg = await expectedPromise;
+      } catch (err) {
+        EXPECTED_CACHE.delete(cacheKey); // don't cache a failure
+        // If the URL guard blocks it (private IP, DNS SSRF, etc.) or it simply
+        // can't load, log a warning and continue with code-only AI evaluation.
+        logger.warn(`renderExpectedScreenshot failed for expectedUrl (${expectedUrl}): ${err.message} — skipping reference screenshot, falling back to code-only scoring.`);
+        expectedImg = null;
+      }
+    } else {
+      logger.info(`expectedUrl is absent or unsafe (${expectedUrl}) — skipping reference screenshot, using code-only AI scoring.`);
     }
 
     // student.html comes from globby, which always normalizes to forward
@@ -340,26 +358,25 @@ export async function evaluateStudentsWithVision({
           let messages;
           if (isVisionModel) {
             const studentImage = await fs.readFile(screenshotPath);
-            messages = [
+            const imageContent = [
+              { type: "text", text: prompt },
               {
-                role: "user",
-                content: [
-                  { type: "text", text: prompt },
-                  {
-                    type: "image_url",
-                    image_url: {
-                      url: `data:image/png;base64,${studentImage.toString("base64")}`
-                    }
-                  },
-                  {
-                    type: "image_url",
-                    image_url: {
-                      url: `data:image/png;base64,${expectedImg.toString("base64")}`
-                    }
-                  }
-                ]
+                type: "image_url",
+                image_url: {
+                  url: `data:image/png;base64,${studentImage.toString("base64")}`
+                }
               }
             ];
+            // Only attach reference image if we successfully loaded it
+            if (expectedImg) {
+              imageContent.push({
+                type: "image_url",
+                image_url: {
+                  url: `data:image/png;base64,${expectedImg.toString("base64")}`
+                }
+              });
+            }
+            messages = [{ role: "user", content: imageContent }];
           } else {
             messages = [
               {
@@ -368,6 +385,7 @@ export async function evaluateStudentsWithVision({
               }
             ];
           }
+
 
           const aiRes = await getOpenAI().chat.completions.create({
             model,
@@ -489,15 +507,7 @@ export async function evaluateStudentsWithVision({
       const finalStrengths = (aiFeedback?.strengths && aiFeedback.strengths.length > 0) ? aiFeedback.strengths : strengths;
       const finalIssues = (aiFeedback?.issues && aiFeedback.issues.length > 0) ? aiFeedback.issues : issues;
 
-      // Deterministic, calibrated reconciliation of unifiedBreakdown with AI code inspection
-      const tierMultipliers = {
-        perfect: 1.0,
-        minor_gap: 0.85,
-        major_gap: 0.60,
-        broken: 0.0,
-        upward_reconciled: 1.0
-      };
-
+      // AI reconciliation enriches feedback reasons; numeric marks are kept 100% deterministic from automated tests.
       const recList = aiFeedback?.reconciliation || aiFeedback?.breakdown || [];
       const finalBreakdown = unifiedBreakdown.map((autoItem, idx) => {
         const rec = recList.find(r =>
@@ -508,43 +518,14 @@ export async function evaluateStudentsWithVision({
         );
 
         if (rec) {
-          let status = String(rec.status || "").toLowerCase().trim();
-          if (!status && typeof rec.awarded === 'number') {
-            const ratio = rec.awarded / (autoItem.max || 1);
-            if (ratio >= 0.95) status = "perfect";
-            else if (ratio >= 0.75) status = "minor_gap";
-            else if (ratio >= 0.40) status = "major_gap";
-            else status = "broken";
-          }
-
-          // Respect the AI's tier judgment. If the AI identified the feature is present
-          // with a minor_gap (0.85) or major_gap (0.60), award those tier points.
-          // Only if status is explicitly "broken" is it 0.
-          const multiplier = tierMultipliers[status] !== undefined
-            ? tierMultipliers[status]
-            : (autoItem.awarded / (autoItem.max || 1));
-
-          const awarded = Math.max(0, Math.min(autoItem.max, Math.round(autoItem.max * multiplier)));
-          const reason = rec.reason || (awarded === autoItem.max ? "All automated checks and code quality checks passed." : "Identified code defects or gaps in implementation.");
-
           return {
-            item: autoItem.item,
-            awarded,
-            max: autoItem.max,
-            reason
+            ...autoItem,
+            reason: rec.reason || autoItem.reason
           };
         }
 
         return autoItem;
       });
-
-      // Recalculate total score strictly from reconciled breakdown
-      const reconciledTotal = finalBreakdown.reduce((sum, b) => sum + (Number(b.awarded) || 0), 0);
-      const maxPossible = finalBreakdown.reduce((sum, b) => sum + (Number(b.max) || 0), 0);
-      const reconciledNormalized = maxPossible > 0 ? Math.round((reconciledTotal / maxPossible) * 100) : 0;
-
-      score.total = reconciledTotal;
-      score.normalized = reconciledNormalized;
 
       results.push({
         name,
@@ -603,7 +584,7 @@ export async function evaluateVisualProject(payload, jobId, githubReport) {
   const rubricText = typeof payload?.rubric === 'string'
     ? payload.rubric
     : (payload?.rubricText || JSON.stringify(payload?.rubric || {}));
-  const expectedUrl = payload?.expectedUrl || process.env.DEFAULT_EXPECTED_URL || "http://localhost:3000";
+  const expectedUrl = payload?.expectedUrl || process.env.DEFAULT_EXPECTED_URL || null;
 
   const isRemote = typeof rawPath === 'string' && (rawPath.startsWith('http://') || rawPath.startsWith('https://') || rawPath.startsWith('git@'));
   let localPath = rawPath;
@@ -623,7 +604,8 @@ export async function evaluateVisualProject(payload, jobId, githubReport) {
       repoPath: localPath,
       rubricText,
       expectedUrl,
-      entryFile: payload?.entryFile || null
+      entryFile: payload?.entryFile || null,
+      skipCache: !!(payload?.skipCache || payload?.reEvaluate || payload?.isReEvaluation)
     });
   } finally {
     if (didClone && localPath) {

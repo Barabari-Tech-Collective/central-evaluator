@@ -441,6 +441,12 @@ Grade each criterion strictly using discrete multipliers (1.0, 0.8, 0.5, 0.2, or
   }
 
   const maxScore = rubric.criteria.reduce((sum, c) => sum + c.weight, 0);
+  // Clamp: Math.round() on each criterion can cause the accumulated total to
+  // slightly exceed maxScore (e.g. 112 instead of 100). Cap it here.
+  if (totalScore > maxScore) {
+    logger.warn(`totalScore (${totalScore}) exceeded maxScore (${maxScore}) due to rounding — clamping to ${maxScore}.`);
+    totalScore = maxScore;
+  }
   const status = totalScore >= maxScore * 0.5 ? "pass" : "fail";
 
   logger.info(`Generating visual feedback for total score: ${totalScore}/${maxScore}`);

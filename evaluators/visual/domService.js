@@ -244,9 +244,9 @@ async function evaluateCheck(page, check) {
     case "updatesovertime": {
       const before = ((await el.textContent()) || "").trim();
       if (!before) return false;
-      // Poll up to 2200ms (covers 1s interval even with event-loop/system jitter)
+      // Poll up to 3500ms (covers 1s interval even with event-loop/system jitter)
       const start = Date.now();
-      while (Date.now() - start < 2200) {
+      while (Date.now() - start < 3500) {
         await page.waitForTimeout(200);
         const elAgain = (await resolveElement(page, check.selector)) || (await page.$(widenSelector(check.selector))) || el;
         const current = elAgain ? ((await elAgain.textContent()) || "").trim() : "";
@@ -282,6 +282,20 @@ async function evaluateCheck(page, check) {
       if (hasYear && hasMonth && hasDay) {
         return true;
       }
+
+      // Tolerant check for Time components (Hour and Minute with ±1 min tolerance)
+      const curHours24 = now.getHours();
+      const curHours12 = curHours24 % 12 || 12;
+      const curMins = now.getMinutes();
+      const possibleMins = [curMins, (curMins + 59) % 60, (curMins + 1) % 60];
+      const hoursPattern = `(^|[^0-9])(${curHours24}|${String(curHours24).padStart(2, '0')}|${curHours12}|${String(curHours12).padStart(2, '0')})([^0-9]|$)`;
+      const minsPattern = `(^|[^0-9])(${possibleMins.flatMap(m => [m, String(m).padStart(2, '0')]).join('|')})([^0-9]|$)`;
+      const hasTime = new RegExp(hoursPattern).test(lower) && new RegExp(minsPattern).test(lower);
+
+      if (hasTime && (lower.includes(':') || /am|pm/.test(lower))) {
+        return true;
+      }
+
       return false;
     }
 
@@ -295,12 +309,17 @@ export async function runDynamicDomChecks(page, rubric) {
 
   for (const item of rubric) {
     if (item.type !== "dom" || !item.checks) continue;
-    for (const check of item.checks) {
-      const key = `${item.description} :: ${check.selector}`;
+    for (let i = 0; i < item.checks.length; i++) {
+      const check = item.checks[i];
+      const indexedKey = `${item.description} :: ${i} :: ${check.selector}`;
+      const unindexedKey = `${item.description} :: ${check.selector}`;
       try {
-        results[key] = await evaluateCheck(page, check);
+        const passed = await evaluateCheck(page, check);
+        results[indexedKey] = passed;
+        results[unindexedKey] = passed;
       } catch {
-        results[key] = false;
+        results[indexedKey] = false;
+        results[unindexedKey] = false;
       }
     }
   }

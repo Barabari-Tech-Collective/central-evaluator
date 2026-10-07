@@ -31,9 +31,12 @@ export function computeDomScore(rubric, domResults) {
     if (item.type !== "dom") continue;
     if (!item.checks || item.checks.length === 0) continue; // V-21: no free credit
     let passed = 0;
-    for (const check of item.checks) {
-      const key = `${item.description} :: ${check.selector}`;
-      if (domResults[key]) passed++;
+    for (let i = 0; i < item.checks.length; i++) {
+      const check = item.checks[i];
+      const indexedKey = `${item.description} :: ${i} :: ${check.selector}`;
+      const unindexedKey = `${item.description} :: ${check.selector}`;
+      const isPassed = domResults[indexedKey] !== undefined ? domResults[indexedKey] : domResults[unindexedKey];
+      if (isPassed) passed++;
     }
     score += (passed / item.checks.length) * (Number(item.weight) || 0);
   }
@@ -46,9 +49,11 @@ export function computeBehaviorScore(rubric, behaviorResults) {
   for (const item of rubric) {
     if (item.type !== "behavior") continue;
     if (!item.checks?.length) continue;
-    const passed = item.checks.every(
-      check => behaviorResults[`${item.description} :: ${check.selector}`]
-    );
+    const passed = item.checks.every((check, i) => {
+      const indexedKey = `${item.description} :: ${i} :: ${check.selector}`;
+      const unindexedKey = `${item.description} :: ${check.selector}`;
+      return behaviorResults[indexedKey] !== undefined ? behaviorResults[indexedKey] : behaviorResults[unindexedKey];
+    });
     if (passed) score += Number(item.weight) || 0;
   }
   return score;
@@ -97,11 +102,16 @@ export function buildDomBreakdown(rubric, domResults) {
   return rubric
     .filter(item => item.type === "dom" && item.checks && item.checks.length > 0)
     .map(item => {
-      const checks = item.checks.map(check => ({
-        selector: check.selector,
-        condition: check.condition || "exists",
-        passed: !!domResults[`${item.description} :: ${check.selector}`]
-      }));
+      const checks = item.checks.map((check, i) => {
+        const indexedKey = `${item.description} :: ${i} :: ${check.selector}`;
+        const unindexedKey = `${item.description} :: ${check.selector}`;
+        const isPassed = domResults[indexedKey] !== undefined ? !!domResults[indexedKey] : !!domResults[unindexedKey];
+        return {
+          selector: check.selector,
+          condition: check.condition || "exists",
+          passed: isPassed
+        };
+      });
       const passedCount = checks.filter(c => c.passed).length;
       const max = Number(item.weight) || 0;
       const awarded = checks.length ? (passedCount / checks.length) * max : 0;
@@ -119,13 +129,18 @@ export function buildBehaviorBreakdown(rubric, behaviorResults) {
   return rubric
     .filter(item => item.type === "behavior" && item.checks && item.checks.length > 0)
     .map(item => {
-      const checks = item.checks.map(check => ({
-        selector: check.selector,
-        action: check.action,
-        mode: check.mode || "navigate",
-        targetSelector: check.targetSelector,
-        passed: !!behaviorResults[`${item.description} :: ${check.selector}`]
-      }));
+      const checks = item.checks.map((check, i) => {
+        const indexedKey = `${item.description} :: ${i} :: ${check.selector}`;
+        const unindexedKey = `${item.description} :: ${check.selector}`;
+        const isPassed = behaviorResults[indexedKey] !== undefined ? !!behaviorResults[indexedKey] : !!behaviorResults[unindexedKey];
+        return {
+          selector: check.selector,
+          action: check.action,
+          mode: check.mode || "navigate",
+          targetSelector: check.targetSelector,
+          passed: isPassed
+        };
+      });
       const max = Number(item.weight) || 0;
       const allPassed = checks.every(c => c.passed);
       return {

@@ -177,7 +177,12 @@ class QueueManager {
       const config = QUEUE_CONFIG[type];
       const queue = this.queues[type];
 
-      // Derive stable jobId for deduplication if not explicitly passed
+      // Derive a unique jobId for every evaluation run.
+      // Previously this was a pure content-hash, which caused BullMQ to silently
+      // skip re-evaluations of the same student (same hash → same jobId → job
+      // already exists → BullMQ returns the old job without queuing a new one →
+      // GitHub Action never fires → score stays "hardcoded" from the last run).
+      // Adding Date.now() ensures every call produces a fresh job.
       let jobId = payload.jobId;
       if (!jobId) {
         const submissionData =
@@ -201,17 +206,8 @@ class QueueManager {
           .update(idPayload)
           .digest('hex')
           .slice(0, 16);
-        jobId = `${type}-${hash}`;
-      }
-
-      // Ensure re-evaluations trigger a fresh GitHub Action / worker execution
-      try {
-        const existingJob = await queue.getJob(String(jobId));
-        if (existingJob) {
-          await existingJob.remove();
-        }
-      } catch {
-        // ignore
+        // Prefix with timestamp to guarantee uniqueness across re-evaluations
+        jobId = `${type}-${Date.now()}-${hash}`;
       }
 
       // Add job to queue with deterministic jobId for deduplication

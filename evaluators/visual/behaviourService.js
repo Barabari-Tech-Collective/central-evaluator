@@ -32,9 +32,9 @@ async function runStateChangeCheck(page, check) {
 
   await btn.click().catch(() => {});
 
-  // Poll up to 1600ms (covers immediate click handlers AND interval-based ticks)
+  // Poll up to 3000ms (covers immediate click handlers AND interval-based ticks under CPU load)
   const start = Date.now();
-  while (Date.now() - start < 1600) {
+  while (Date.now() - start < 3000) {
     await page.waitForTimeout(150);
 
     const afterEl = (await resolveElement(page, targetSelector)) || (await page.$(widenSelector(targetSelector)));
@@ -61,20 +61,28 @@ export default async function runBehaviorChecks(page, rubric) {
   for (const item of rubric) {
     if (item.type !== "behavior" || !item.checks) continue;
 
-    for (const check of item.checks) {
-      const key = `${item.description} :: ${check.selector}`;
+    for (let i = 0; i < item.checks.length; i++) {
+      const check = item.checks[i];
+      const indexedKey = `${item.description} :: ${i} :: ${check.selector}`;
+      const unindexedKey = `${item.description} :: ${check.selector}`;
+
+      const setCheckResult = (val) => {
+        results[indexedKey] = val;
+        results[unindexedKey] = val;
+      };
 
       if (check.mode === "stateChange") {
         try {
-          results[key] = await runStateChangeCheck(page, check);
+          const passed = await runStateChangeCheck(page, check);
+          setCheckResult(passed);
         } catch {
-          results[key] = false;
+          setCheckResult(false);
         }
         continue;
       }
 
       if (check.action !== "click") {
-        results[key] = false;
+        setCheckResult(false);
         continue;
       }
 
@@ -86,7 +94,7 @@ export default async function runBehaviorChecks(page, rubric) {
       try {
         const el = (await resolveElement(page, check.selector)) || (await page.$(widenSelector(check.selector)));
         if (!el) {
-          results[key] = false;
+          setCheckResult(false);
           continue;
         }
 
@@ -115,19 +123,21 @@ export default async function runBehaviorChecks(page, rubric) {
           resultUrl = page.url();
         }
 
-        results[key] = expected
+        const passed = expected
           ? resultUrl.includes(expected)
           : resultUrl !== startUrl; // no expected → any navigation counts as pass
+        setCheckResult(passed);
 
         // Reset for the next check
         if (page.url() !== startUrl) {
           await page.goto(startUrl, { timeout: 10000 }).catch(() => {});
         }
       } catch {
-        results[key] = false;
+        setCheckResult(false);
       }
     }
   }
 
   return results;
 }
+

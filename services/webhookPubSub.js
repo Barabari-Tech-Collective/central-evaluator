@@ -42,6 +42,24 @@ class WebhookPubSub extends EventEmitter {
 
   async waitForWebhook(jobId, timeoutMs) {
     this.init(); // ensure subscriber is running
+
+    // Fast path: if the webhook already arrived before we subscribed
+    // (e.g. server restarted while GitHub Action was in flight), the
+    // webhookController stored it in Redis with a 5-min TTL.
+    // Check for it immediately so we don't have to wait for the full timeout.
+    const redisClient = redisConnection.getClient();
+    const cachedKey = `github_webhook_result_${jobId}`;
+    try {
+      const cached = await redisClient.get(cachedKey);
+      if (cached) {
+        logger.info(`WebhookPubSub: found pre-stored webhook result for ${jobId} (cache hit — skipping pub/sub wait)`);
+        await redisClient.del(cachedKey); // clean up so re-evaluations don't get stale data
+        return JSON.parse(cached);
+      }
+    } catch (err) {
+      logger.warn(`WebhookPubSub: Redis key check failed for ${jobId}: ${err.message} — falling back to pub/sub`);
+    }
+
     return new Promise((resolve, reject) => {
       const channel = `github_webhook_${jobId}`;
       let timeoutId;
