@@ -27,11 +27,18 @@ export const handleGithubWebhook = async (req, res) => {
 
     logger.info(`Received GitHub webhook for job: ${jobId} with status: ${status}`);
 
-    // Publish the entire result to the Redis channel that the worker is listening on
     const publisher = redisConnection.getClient();
+    const payloadStr = JSON.stringify(req.body);
+
+    // 1. Write to a keyed Redis entry (5 min TTL) so a worker that missed the
+    //    pub/sub message (e.g. restarted just before the webhook arrived) can
+    //    still retrieve the result by polling the key.
+    await publisher.set(`github_webhook_result_${jobId}`, payloadStr, 'EX', 300);
+
+    // 2. Publish to the channel for any live subscriber already waiting.
     await publisher.publish(
       `github_webhook_${jobId}`,
-      JSON.stringify(req.body)
+      payloadStr
     );
 
     return res.status(200).json({ success: true, message: "Webhook processed" });

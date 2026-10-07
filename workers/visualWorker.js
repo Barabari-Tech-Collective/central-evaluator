@@ -45,6 +45,12 @@ export async function initializeVisualWorker() {
                    const mockPayload = {
                      repoUrl: tempDir, // repoService will know to skip cloning if it's already a dir
                      rubric: job.data.rubric || job.data.rubricText,
+                     assignmentId: job.data.assignmentId,
+                     expectedUrl: job.data.expectedUrl,
+                     studentId: job.data.submission?.studentId || job.data.studentId,
+                     studentName: job.data.submission?.studentName || job.data.studentName || job.data.submission?.name,
+                     entryFile: job.data.entryFile || job.data.submission?.entryFile,
+                     skipCache: job.data.skipCache || job.data.reEvaluate || job.data.isReEvaluation || false
                    };
                    return await evaluateVisualProject(mockPayload, job.id, githubReport);
                 } finally {
@@ -62,10 +68,7 @@ export async function initializeVisualWorker() {
               const extraPayload = {
                 rubricText: job.data.rubricText,
                 expectedUrl: job.data.expectedUrl,
-                assignmentId: job.data.assignmentId,
-                studentId: submission.studentId,
-                studentName: submission.studentName,
-                entryFile: submission.entryFile
+                assignmentId: job.data.assignmentId
               };
 
               await triggerGraderWorkflow(repoUrl, job.id, webhookUrl, 'run-visual-evaluation', extraPayload);
@@ -89,6 +92,12 @@ export async function initializeVisualWorker() {
               const payload = {
                 repoUrl: repoUrl,
                 rubric: job.data.rubric || job.data.rubricText,
+                assignmentId: job.data.assignmentId,
+                expectedUrl: job.data.expectedUrl,
+                studentId: submission?.studentId || job.data.studentId,
+                studentName: submission?.studentName || job.data.studentName || submission?.name,
+                entryFile: job.data.entryFile || submission?.entryFile,
+                skipCache: job.data.skipCache || job.data.reEvaluate || job.data.isReEvaluation || false
               };
 
               return await evaluateVisualProject(payload, job.id, githubReport);

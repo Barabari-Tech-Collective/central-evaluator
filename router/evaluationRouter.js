@@ -41,10 +41,16 @@ export async function routeEvaluation(payload) {
          payload.expectedLogs,
         assignmentId:
          payload.assignmentId,
+        rubric:
+          payload.rubric,
         rubricText:
           payload.rubricText,
         expectedUrl:
-          payload.expectedUrl
+          payload.expectedUrl,
+        skipCache:
+          payload.skipCache || payload.reEvaluate || false,
+        reEvaluate:
+          payload.reEvaluate || false
       }
       );
 
