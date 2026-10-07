@@ -233,7 +233,7 @@ export async function evaluateCodeStructure(projectPath) {
     for (const f of files) {
       const relativePath = path.relative(projectPath, f);
       const content = await fs.readFile(f, "utf8");
-      codeStr += `\n--- ${relativePath} ---\n${content.slice(0, 2000)}\n`;
+      codeStr += `\n--- ${relativePath} ---\n${content.slice(0, 6000)}\n`;
     }
 
     const prompt = `
@@ -244,16 +244,17 @@ ${codeStr}
 Evaluate component breakdown, hook usage, and React best practices.
 Assign a discrete score multiplier based strictly on verified code quality:
 - 1.0 = Excellent structure, clean hooks, idiomatic component decomposition.
+- 0.9 = Very good structure with only minor formatting or styling gaps.
 - 0.8 = Good structure with minor gaps (e.g., slightly large components, minor prop drilling).
 - 0.5 = Partial structure (some components split, but messy state management).
 - 0.2 = Minimal effort (almost everything dumped in one file).
 - 0.0 = No valid React code or broken structure.
 
-Use ONLY the discrete multipliers: 1.0, 0.8, 0.5, 0.2, or 0.0. Do NOT use arbitrary floating-point values.
+Use ONLY the discrete multipliers: 1.0, 0.9, 0.8, 0.5, 0.2, or 0.0. Do NOT use arbitrary floating-point values.
 
 Output STRICTLY a JSON object:
 {
-  "scoreMultiplier": <number 0.0, 0.2, 0.5, 0.8, or 1.0>,
+  "scoreMultiplier": <number 0.0, 0.2, 0.5, 0.8, 0.9, or 1.0>,
   "reasoning": "<1 sentence explanation on what was good or bad>"
 }
 Do NOT include any markdown or text besides the raw JSON object.

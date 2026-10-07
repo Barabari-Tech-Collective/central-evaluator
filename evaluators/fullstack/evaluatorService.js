@@ -76,7 +76,7 @@ async function getProjectCodeString(projectPath) {
     try {
       const content = await fs.promises.readFile(f, "utf8");
       const compressed = compressCode(content);
-      codeStr += `\n--- ${relativePath} ---\n${compressed.slice(0, 2000)}\n`;
+      codeStr += `\n--- ${relativePath} ---\n${compressed.slice(0, 6000)}\n`;
     } catch {
       // Skip unreadable files
     }
@@ -259,13 +259,14 @@ Do NOT penalize if .env file is missing (expected for security reasons).
 
 Assign a discrete score multiplier for EACH criterion based strictly on verified code evidence:
 - 1.0 = Fully meets all exact requirements for this criterion (frontend components, backend APIs, and integration complete and correct).
-- 0.8 = Mostly correct with only minor syntax, naming, or styling gaps.
-- 0.5 = Partial implementation of the required feature.
+- 0.9 = Mostly correct with only very minor syntax, naming, or styling gaps (e.g. minor formatting or non-critical omission).
+- 0.8 = Good implementation but missing one specific sub-feature.
+- 0.5 = Partial implementation of the required feature (~50% of required functionality present).
 - 0.2 = Bare minimum skeleton or stub only.
 - 0.0 = Not attempted, completely missing, or completely unrelated project.
 
 CRITICAL SCORING RULE:
-Use ONLY the discrete multipliers: 1.0, 0.8, 0.5, 0.2, or 0.0.
+Use ONLY the discrete multipliers: 1.0, 0.9, 0.8, 0.5, 0.2, or 0.0.
 Do NOT use intermediate or arbitrary decimal values like 0.84, 0.91, 0.73, etc.
 
 For EACH criterion write a concise 1-2 sentence explanation:

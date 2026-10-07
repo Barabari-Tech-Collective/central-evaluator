@@ -97,8 +97,8 @@ async function getProjectCodeString(projectPath) {
     try {
       const content = await fs.readFile(f, "utf8");
       const compressed = compressCode(content);
-      // Cap each file at 2000 compressed chars to be ultra token efficient
-      codeStr += `\n--- ${relativePath} ---\n${compressed.slice(0, 2000)}\n`;
+      // Cap each file at 6000 compressed chars to prevent mid-function truncation
+      codeStr += `\n--- ${relativePath} ---\n${compressed.slice(0, 6000)}\n`;
     } catch {
       // Skip unreadable files
     }
@@ -297,13 +297,14 @@ CRITICAL RULES:
 
 Assign a discrete score multiplier for EACH criterion based strictly on verified code evidence:
 - 1.0 = Fully meets all exact requirements for this criterion.
-- 0.8 = Correct with only minor gaps or formatting issues (e.g. missing empty-input check, or minor linter warnings).
-- 0.5 = Partial implementation of the exact feature.
+- 0.9 = Mostly correct with only minor gaps or formatting issues (e.g. missing empty-input check, or minor linter warnings).
+- 0.8 = Good implementation but missing one specific sub-feature.
+- 0.5 = Partial implementation of the exact feature (~50% of required functionality present).
 - 0.2 = Bare minimum skeleton of the exact feature.
 - 0.0 = Not attempted, completely missing, or irrelevant project code.
 
 CRITICAL SCORING RULE:
-Use ONLY the discrete multipliers: 1.0, 0.8, 0.5, 0.2, or 0.0.
+Use ONLY the discrete multipliers: 1.0, 0.9, 0.8, 0.5, 0.2, or 0.0.
 Do NOT use intermediate or arbitrary decimal values like 0.85, 0.92, 0.74, etc.
 
 For EACH criterion write a detailed 2-3 sentence reasoning that:
@@ -314,7 +315,7 @@ For EACH criterion write a detailed 2-3 sentence reasoning that:
 Output STRICTLY a JSON object (no markdown, no extra text):
 {
   "scores": [
-    { "name": "<exact criterion name>", "multiplier": <number 0.0, 0.2, 0.5, 0.8, or 1.0>, "reasoning": "<2-3 sentence code-specific explanation>" }
+    { "name": "<exact criterion name>", "multiplier": <number 0.0, 0.2, 0.5, 0.8, 0.9, or 1.0>, "reasoning": "<2-3 sentence code-specific explanation>" }
   ]
 }`;
 
@@ -456,10 +457,10 @@ ${codeString}
 ## Rubric Criteria:
 ${missingList}
 
-Grade each criterion strictly using discrete multipliers (1.0, 0.8, 0.5, 0.2, or 0.0). Return STRICTLY a JSON object:
+Grade each criterion strictly using discrete multipliers (1.0, 0.9, 0.8, 0.5, 0.2, or 0.0). Return STRICTLY a JSON object:
 {
   "scores": [
-    { "name": "<exact criterion name>", "multiplier": <number 0.0, 0.2, 0.5, 0.8, or 1.0>, "reasoning": "<2-3 sentence explanation>" }
+    { "name": "<exact criterion name>", "multiplier": <number 0.0, 0.2, 0.5, 0.8, 0.9, or 1.0>, "reasoning": "<2-3 sentence explanation>" }
   ]
 }`;
           const retryResponse = await groq.chat.completions.create({

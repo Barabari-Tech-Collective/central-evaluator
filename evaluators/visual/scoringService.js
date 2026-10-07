@@ -81,8 +81,8 @@ async function getProjectCodeString(projectPath) {
     try {
       const content = await fs.readFile(f, "utf8");
       const compressed = compressCode(content);
-      // Cap each file at 2000 compressed chars to be ultra token efficient
-      codeStr += `\n--- ${relativePath} ---\n${compressed.slice(0, 2000)}\n`;
+      // Cap each file at 6000 compressed chars to prevent truncation
+      codeStr += `\n--- ${relativePath} ---\n${compressed.slice(0, 6000)}\n`;
     } catch {
       // Skip unreadable files
     }
@@ -207,13 +207,14 @@ Pay close attention to whether the HTML actually links to the CSS (<link>) and J
 
 Assign a discrete score multiplier for EACH criterion based strictly on verified code evidence:
 - 1.0 = Fully meets all exact requirements for this criterion (code is fully functional, complete, and linked correctly).
-- 0.8 = Mostly correct with only minor syntax, styling, or formatting flaws (e.g. missing 2-digit zero-padding, minor CSS defect).
+- 0.9 = Mostly correct with only very minor syntax, styling, or formatting flaws (e.g. minor CSS defect or minor spacing flaw).
+- 0.8 = Good implementation but missing one specific sub-feature (e.g. missing 2-digit zero-padding or missing a secondary class).
 - 0.5 = Partial implementation (core logic started but missing major aspects).
 - 0.2 = Bare minimum skeleton or stub only.
 - 0.0 = Not attempted, completely missing, or completely unrelated code.
 
 CRITICAL SCORING RULE:
-Use ONLY the discrete multipliers: 1.0, 0.8, 0.5, 0.2, or 0.0.
+Use ONLY the discrete multipliers: 1.0, 0.9, 0.8, 0.5, 0.2, or 0.0.
 Do NOT use intermediate or arbitrary decimal values like 0.84, 0.91, 0.73, etc.
 
 For EACH criterion write a concise 1-2 sentence explanation:
@@ -226,7 +227,7 @@ You MUST evaluate and return a score entry for ALL ${rubric.criteria.length} cri
 Output STRICTLY a JSON object (no markdown, no extra text):
 {
   "scores": [
-    { "name": "<exact criterion name>", "multiplier": <number 0.0, 0.2, 0.5, 0.8, or 1.0>, "reasoning": "<1-2 sentence concise explanation>" }
+    { "name": "<exact criterion name>", "multiplier": <number 0.0, 0.2, 0.5, 0.8, 0.9, or 1.0>, "reasoning": "<1-2 sentence concise explanation>" }
   ]
 }`;
 
